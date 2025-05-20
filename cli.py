@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 from typing import List, Optional
+
+import yfinance as yf
 
 import option_analysis as oa
 from spread_analysis import SpreadType, get_credit_spreads, filter_credit_spreads
+import expiry_selector
 
 
 def main(args: Optional[List[str]] = None) -> None:
@@ -33,15 +37,25 @@ def main(args: Optional[List[str]] = None) -> None:
     parser.add_argument(
         "--expiry-dates",
         nargs="+",
-        help="Explicit expiry dates (YYYY-MM-DD). Uses expiries within 14 days if omitted.",
+        help="Explicit list of expiries (YYYY-MM-DD). Overrides --max-days",
+    )
+    parser.add_argument(
+        "--max-days",
+        type=int,
+        default=14,
+        help="Analyze every expiry up to this many calendar days ahead (default 14)",
     )
     parsed = parser.parse_args(args)
 
     spread_type = SpreadType(parsed.type)
-    if parsed.expiry_dates:
-        expiries = parsed.expiry_dates
-    else:
-        expiries = oa.expiries_within()
+    ticker = yf.Ticker("SPY")
+    explicit_list = parsed.expiry_dates if parsed.expiry_dates else []
+    expiries = (
+        explicit_list
+        if explicit_list
+        else expiry_selector.expiries_within(ticker, max_days=parsed.max_days)
+    )
+    today = dt.date.today()
 
     for expiry in expiries:
         for width in parsed.widths:
