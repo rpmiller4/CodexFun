@@ -30,10 +30,18 @@ def main(args: Optional[List[str]] = None) -> None:
             "Spreads are skipped if resulting IV < floor."
         ),
     )
+    parser.add_argument(
+        "--expiry-dates",
+        nargs="+",
+        help="Explicit expiry dates (YYYY-MM-DD). Uses expiries within 14 days if omitted.",
+    )
     parsed = parser.parse_args(args)
 
     spread_type = SpreadType(parsed.type)
-    expiries = oa.get_expiries_by_market_days([3, 7, 14, 21])
+    if parsed.expiry_dates:
+        expiries = parsed.expiry_dates
+    else:
+        expiries = oa.expiries_within()
 
     for expiry in expiries:
         for width in parsed.widths:
