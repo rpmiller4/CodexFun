@@ -58,12 +58,12 @@ class SpreadTests(unittest.TestCase):
         import pandas as pd
         from unittest.mock import patch
 
-        # fake option chain with zero IV on long leg
+        # fake option chain with zero IVs so fallback also fails
         df = pd.DataFrame(
             {
                 "strike": [100, 95],
                 "lastPrice": [2.0, 0.5],
-                "impliedVolatility": [0.25, 0.0],
+                "impliedVolatility": [0.0, 0.0],
             }
         )
 
@@ -79,7 +79,10 @@ class SpreadTests(unittest.TestCase):
             def option_chain(self, expiry):
                 return FakeChain(df)
 
-        with patch("yfinance.Ticker", return_value=FakeTicker()):
+        with patch("yfinance.Ticker", return_value=FakeTicker()), patch(
+            "vol_utils.vix_sigma",
+            return_value=0.0,
+        ):
             spreads = sa.get_credit_spreads(
                 "2099-01-01", width=5.0, spread_type=sa.SpreadType.BULL_PUT
             )

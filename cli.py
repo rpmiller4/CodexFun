@@ -8,7 +8,10 @@ from spread_analysis import SpreadType, get_credit_spreads, filter_credit_spread
 
 
 def main(args: Optional[List[str]] = None) -> None:
-    parser = argparse.ArgumentParser(description="SPY credit-spread screener")
+    parser = argparse.ArgumentParser(
+        description="SPY credit-spread screener",
+        epilog="Outputs headings like '=== Bull-Put Spreads ~7 Market Days ==='",
+    )
     parser.add_argument(
         "--type",
         choices=[t.value for t in SpreadType],
@@ -20,15 +23,17 @@ def main(args: Optional[List[str]] = None) -> None:
     parser.add_argument(
         "--min-iv",
         type=float,
-        default=0.01,
-        help="Skip contracts whose implied volatility is below this value",
+        default=0.05,
+        help=(
+            "Floor for acceptable implied volatility (default 0.05 = 5 %%).  "
+            "Missing/low IV is replaced by ATM IV, else VIX \u03c3.  "
+            "Spreads are skipped if resulting IV < floor."
+        ),
     )
     parsed = parser.parse_args(args)
 
     spread_type = SpreadType(parsed.type)
     expiries = oa.get_expiries_by_market_days([3, 7, 14, 21])
-
-    header = "Bull-Put" if spread_type == SpreadType.BULL_PUT else "Bear-Call"
 
     for expiry in expiries:
         spreads = get_credit_spreads(
@@ -41,13 +46,17 @@ def main(args: Optional[List[str]] = None) -> None:
         if not spreads:
             continue
         days = spreads[0].days_to_expiry
-        print(f"=== {header} Spreads ~{days} Market Days ===")
         print(
-            f"{'Short':>5} {'Long':>5} {'Credit':>7} {'MaxLoss':>8} {'Credit%':>8} {'PoP':>5} {'IVshort':>7} {'IVlong':>7} {'Days':>4}"
+            f"=== {spread_type.value.replace('_','-').title()} Spreads ~{days} Market Days ==="
+        )
+        print(
+            f"{'Short':>5} {'Long':>5} {'Credit':>7} {'MaxLoss':>8} {'Credit%':>8} {'PoP':>5} {'IVs':>7} {'Src':>7} {'Days':>4}"
         )
         for sp in spreads:
+            ivs = f"{sp.short.iv:.2f}/{sp.long.iv:.2f}"
+            srcs = f"{sp.iv_short_src.value}/{sp.iv_long_src.value}"
             print(
-                f"{sp.short.strike:5.0f} {sp.long.strike:5.0f} {sp.credit:7.2f} {sp.max_loss:8.2f} {sp.credit_pct:8.1f}% {sp.pop:5.2f} {sp.short.iv:7.2f} {sp.long.iv:7.2f} {sp.days_to_expiry:4d}"
+                f"{sp.short.strike:5.0f} {sp.long.strike:5.0f} {sp.credit:7.2f} {sp.max_loss:8.2f} {sp.credit_pct:8.1f}% {sp.pop:5.2f} {ivs:>7} {srcs:>7} {sp.days_to_expiry:4d}"
             )
         print()
 
