@@ -11,6 +11,7 @@ import yfinance as yf
 from models import OptionContract
 import option_analysis as oa
 from vol_utils import resolve_iv, iv_is_valid, MIN_IV_DEFAULT, IVSource
+from utils import MIN_SIGMA, fetch_with_retry
 
 
 def _norm_cdf(x: float) -> float:
@@ -36,11 +37,14 @@ class Spread:
     iv_short_src: IVSource
     iv_long_src: IVSource
     days_to_expiry: int
+    sigma_used: float
 
     @property
-    def edge(self) -> float:
-        """Return combined credit percentage and probability of profit."""
-        return self.credit_pct * self.pop
+    def expected_value(self) -> float:
+        """Return the theoretical expected value of the spread."""
+        win = self.credit * self.pop
+        loss = (self.width - self.credit) * (1 - self.pop)
+        return win - loss
 
 
 def make_spread(
@@ -77,6 +81,7 @@ def make_spread(
         iv_short_src=short.iv_src,
         iv_long_src=long.iv_src,
         days_to_expiry=days_to_expiry,
+        sigma_used=short.iv,
     )
 
 
@@ -85,11 +90,12 @@ def get_credit_spreads(
     width: float = 5.0,
     spread_type: SpreadType = SpreadType.BULL_PUT,
     min_iv: float = MIN_IV_DEFAULT,
+    sigma_floor: float = MIN_SIGMA,
 ) -> List[Spread]:
     """Return credit spreads for the given expiry and width."""
     ticker = yf.Ticker("SPY")
-    underlying = float(ticker.history(period="1d")["Close"].iloc[-1])
-    chain = ticker.option_chain(expiry)
+    underlying = float(fetch_with_retry(ticker.history, period="1d")["Close"].iloc[-1])
+    chain = fetch_with_retry(ticker.option_chain, expiry)
     df = chain.puts if spread_type == SpreadType.BULL_PUT else chain.calls
     expiry_date = dt.datetime.strptime(expiry, "%Y-%m-%d").date()
     today = dt.date.today()
@@ -116,8 +122,8 @@ def get_credit_spreads(
         long = options.get(long_strike)
         if long is None:
             continue
-        ivS, srcS = resolve_iv(short.iv, df, underlying, days, min_iv)
-        ivL, srcL = resolve_iv(long.iv, df, underlying, days, min_iv)
+        ivS, srcS = resolve_iv(short.iv, df, underlying, days, min_iv, sigma_floor)
+        ivL, srcL = resolve_iv(long.iv, df, underlying, days, min_iv, sigma_floor)
         if not (iv_is_valid(ivS, min_iv) and iv_is_valid(ivL, min_iv)):
             continue
         if short.last_price == 0 or long.last_price == 0:
@@ -139,7 +145,7 @@ def filter_credit_spreads(
         for s in spreads
         if s.pop >= pop_min and s.credit_pct >= credit_min_pct
     ]
-    filtered.sort(key=lambda s: s.edge, reverse=True)
+    filtered.sort(key=lambda s: s.expected_value, reverse=True)
     return filtered
 
 
