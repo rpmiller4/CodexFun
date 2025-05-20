@@ -61,3 +61,12 @@ Missing or too-low implied volatility is replaced in stages:
 
 Use `--min-iv` to change the minimum acceptable IV (default `0.05`).
 
+### Expiry selection
+By default the screener scans *every* listed SPY expiry within the next **14 calendar days**:
+
+```bash
+python cli.py --type bull_put  # scans all expiries \u226414 days
+python cli.py --max-days 30    # widen window to 30 days
+python cli.py --expiry-dates 2025-06-05 2025-06-21  # override with explicit list
+```
+
