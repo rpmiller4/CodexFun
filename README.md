@@ -27,18 +27,31 @@ python spy_options.py
 By default the script chooses the closest expiry and prints the best call
 option based on the simple heuristic above.
 
-## Credit-spread screener
+## Credit-Spread Screener
 
-The `cli.py` script screens SPY bull-put or bear-call credit spreads by probability-of-profit and credit percentage.
-
-Example:
+The `cli.py` script screens SPY bull-put or bear-call credit spreads.  Provide one or more widths and minimum IV threshold:
 
 ```bash
-python cli.py --type bull_put --pop 0.70 --credit 30
+python cli.py --type bull_put --widths 2 5 10 --pop 0.7 --credit 25 --min-iv 0.05
 ```
 
+Output columns:
+
+| Column   | Meaning                                   |
+|----------|-------------------------------------------|
+| Short    | Short strike price                        |
+| Long     | Long strike price                         |
+| Credit   | Net credit received                       |
+| MaxLoss  | Maximum possible loss                     |
+| Credit%  | Credit as percentage of spread width      |
+| PoP      | Theoretical probability of profit         |
+| IVs      | Short/long implied volatility values      |
+| Src      | IV sources for short/long legs            |
+| Days     | Calendar days to expiry                   |
+
 ### IV handling
-The screener replaces missing or near-zero implied volatility in two stages:
+
+Missing or too-low implied volatility is replaced in stages:
 
 | Source tag | Meaning |
 |------------|---------|
@@ -46,5 +59,5 @@ The screener replaces missing or near-zero implied volatility in two stages:
 | `atm`  | Missing IV replaced by at-the-money IV for that expiry |
 | `vix`  | Still missing → replaced by VIX-based σ scaled to expiry |
 
-Use `--min-iv` (default 0.05) to set the minimum acceptable IV after fallback.
+Use `--min-iv` to change the minimum acceptable IV (default `0.05`).
 

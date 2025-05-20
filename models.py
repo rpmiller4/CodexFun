@@ -14,9 +14,9 @@ class OptionContract:
     expiry: dt.date
     option_type: str  # "call" or "put"
     last_price: float
-    iv: Optional[float] = None
-    iv_src: IVSource | None = None
-    underlying_price: Optional[float] = None
+    iv: float
+    iv_src: IVSource
+    underlying_price: float
     symbol: Optional[str] = None
     open_interest: Optional[int] = None
 

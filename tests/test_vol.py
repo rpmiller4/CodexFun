@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from vol_utils import resolve_iv, IVSource
+from vol_utils import resolve_iv, iv_is_valid, IVSource
 
 
 class VolUtilsTests(unittest.TestCase):
@@ -31,6 +31,10 @@ class VolUtilsTests(unittest.TestCase):
         result = subprocess.run([sys.executable, os.path.join(os.path.dirname(__file__), "..", "cli.py"), "--help"], capture_output=True, text=True)
         self.assertIn("~", result.stdout)
         self.assertNotIn("\u2248", result.stdout)
+
+    def test_iv_is_valid_threshold(self):
+        self.assertTrue(iv_is_valid(0.1, 0.05))
+        self.assertFalse(iv_is_valid(0.04, 0.05))
 
 
 if __name__ == "__main__":

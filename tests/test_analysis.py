@@ -6,6 +6,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import option_analysis as oa
+from vol_utils import IVSource
 
 
 class OptionAnalysisTests(unittest.TestCase):
@@ -24,6 +25,7 @@ class OptionAnalysisTests(unittest.TestCase):
             strike=strike,
             last_price=price,
             iv=self.iv,
+            iv_src=IVSource.ORIG,
             expiry=self.expiry,
             option_type="call",
             underlying_price=self.underlying,
