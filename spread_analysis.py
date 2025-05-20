@@ -37,6 +37,11 @@ class Spread:
     iv_long_src: IVSource
     days_to_expiry: int
 
+    @property
+    def edge(self) -> float:
+        """Return combined credit percentage and probability of profit."""
+        return self.credit_pct * self.pop
+
 
 def make_spread(
     spread_type: SpreadType,
@@ -134,7 +139,7 @@ def filter_credit_spreads(
         for s in spreads
         if s.pop >= pop_min and s.credit_pct >= credit_min_pct
     ]
-    filtered.sort(key=lambda s: (-s.pop, -s.credit_pct))
+    filtered.sort(key=lambda s: s.edge, reverse=True)
     return filtered
 
 

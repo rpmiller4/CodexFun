@@ -76,13 +76,13 @@ def main(args: Optional[List[str]] = None) -> None:
                 f"=== {stype.title()} Spreads ~{days} Days | Width ${width} ==="
             )
             print(
-                f"{'Short':>5} {'Long':>5} {'Credit':>7} {'MaxLoss':>8} {'Credit%':>8} {'PoP':>5} {'IVs':>7} {'Src':>9} {'Days':>4}"
+                f"{'Short':>5} {'Long':>5} {'Credit':>7} {'MaxLoss':>8} {'Credit%':>8} {'PoP':>5} {'Edge':>7} {'IVs':>7} {'Src':>9} {'Days':>4}"
             )
             for sp in spreads:
                 ivs = f"{sp.short.iv:.2f}/{sp.long.iv:.2f}"
                 srcs = f"{sp.iv_short_src.value}/{sp.iv_long_src.value}"
                 print(
-                    f"{sp.short.strike:5.0f} {sp.long.strike:5.0f} {sp.credit:7.2f} {sp.max_loss:8.2f} {sp.credit_pct:8.1f}% {sp.pop:5.2f} {ivs:>7} {srcs:>9} {sp.days_to_expiry:4d}"
+                    f"{sp.short.strike:5.0f} {sp.long.strike:5.0f} {sp.credit:7.2f} {sp.max_loss:8.2f} {sp.credit_pct:8.1f}% {sp.pop:5.2f} {sp.edge:7.2f} {ivs:>7} {srcs:>9} {sp.days_to_expiry:4d}"
                 )
             print()
 
