@@ -10,9 +10,13 @@ Note: Internet access is required to fetch data from Yahoo Finance.
 from __future__ import annotations
 
 import datetime as dt
-from typing import Optional
+from typing import Optional, List
+
+import argparse
+import csv
 
 from models import OptionContract
+import option_analysis as oa
 
 import pandas as pd
 import yfinance as yf
@@ -73,20 +77,46 @@ def list_option_expiries():
     return ticker.options
 
 
-def main() -> None:
-    # Example usage
-    expiries = list_option_expiries()
-    if not expiries:
-        raise RuntimeError("No expiries found for SPY")
+def main(args: Optional[List[str]] = None) -> None:
+    parser = argparse.ArgumentParser(description="SPY option analysis")
+    parser.add_argument("--pop-threshold", type=float, default=0.65)
+    parser.add_argument("--tv-threshold", type=float, default=0.25)
+    parsed = parser.parse_args(args)
 
-    expiry = expiries[0]  # choose the nearest expiry
-    best_call = find_best_option(expiry, option_type="call")
-    if best_call:
-        print("Latest SPY price:", get_latest_spy_price())
-        print("Best call option:")
-        print(best_call)
-    else:
-        print("No suitable option found")
+    expiries = oa.get_expiries_by_market_days([3, 7, 14, 21])
+    all_options = oa.get_call_option_analysis(expiries)
+    filtered = oa.filter_options_by_pop_and_timevalue_percent(
+        all_options, parsed.pop_threshold, parsed.tv_threshold
+    )
+
+    groups = {}
+    for opt in filtered:
+        groups.setdefault(opt.days_to_expiry, []).append(opt)
+
+    with open("filtered_options.csv", "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Strike", "PoP", "Time %", "IV", "Days"])
+        for days in sorted(groups.keys()):
+            for opt in groups[days]:
+                tv_perc = opt.time_value / opt.last_price * 100 if opt.last_price else 0
+                writer.writerow([
+                    f"{opt.strike:.1f}",
+                    f"{opt.pop:.2f}",
+                    f"{tv_perc:.1f}%",
+                    f"{opt.iv:.2f}",
+                    days,
+                ])
+
+    for days in sorted(groups.keys()):
+        print(f"### Expiry \u2248 {days} Market Days")
+        print("Strike | PoP | Time % | IV | Days")
+        print("----------------------------------")
+        for opt in groups[days]:
+            tv_perc = opt.time_value / opt.last_price * 100 if opt.last_price else 0
+            print(
+                f"{opt.strike:.1f} | {opt.pop:.2f} | {tv_perc:.1f}% | {opt.iv:.2f} | {days}"
+            )
+        print()
 
 
 if __name__ == "__main__":

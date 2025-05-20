@@ -7,6 +7,8 @@ import datetime as dt
 import math
 from typing import List, Optional
 
+import numpy as np
+
 from models import OptionContract, OptionAnalysis
 
 import yfinance as yf
@@ -47,6 +49,25 @@ def black_scholes_d2(S: float, K: float, T: float, r: float, sigma: float) -> fl
     return d1 - sigma * math.sqrt(T)
 
 
+def get_expiries_by_market_days(targets: List[int] = [3, 7, 14, 21]) -> List[str]:
+    """Return expiry strings matching the provided market-day targets."""
+    ticker = yf.Ticker("SPY")
+    expiries = ticker.options
+    today = dt.date.today()
+    expiry_dates = [dt.datetime.strptime(e, "%Y-%m-%d").date() for e in expiries]
+
+    selected: List[str] = []
+    for target in targets:
+        chosen = None
+        for exp in expiry_dates:
+            if np.busday_count(today, exp) >= target:
+                chosen = exp
+                break
+        if chosen is not None:
+            selected.append(chosen.strftime("%Y-%m-%d"))
+    return selected
+
+
 
 
 def compute_option_metrics(
@@ -55,7 +76,8 @@ def compute_option_metrics(
     """Return computed metrics for a given option contract."""
     if today is None:
         today = dt.date.today()
-    T = max((option.expiry - today).days / 365.0, 0.0)
+    days_to_expiry = max((option.expiry - today).days, 0)
+    T = days_to_expiry / 365.0
 
     d2 = black_scholes_d2(option.underlying_price, option.strike, T, r, option.iv)
     pop = _norm_cdf(d2)
@@ -75,44 +97,61 @@ def compute_option_metrics(
         pop=pop,
         intrinsic_value=intrinsic,
         time_value=time_value,
+        days_to_expiry=days_to_expiry,
     )
 
 
-def get_call_option_analysis(r: float = 0.05) -> List[OptionAnalysis]:
-    """Fetch SPY call options for the nearest expiry and compute metrics."""
+def get_call_option_analysis(expiry_strs: List[str], r: float = 0.05) -> List[OptionAnalysis]:
+    """Fetch SPY call options for the given expiries and compute metrics."""
     ticker = yf.Ticker("SPY")
-    expiries = ticker.options
-    if not expiries:
-        raise RuntimeError("No expiries found for SPY")
-    expiry_str = expiries[0]
-    expiry_date = dt.datetime.strptime(expiry_str, "%Y-%m-%d").date()
-
     underlying = float(ticker.history(period="1d")["Close"].iloc[-1])
-    chain = ticker.option_chain(expiry_str).calls
 
     results: List[OptionAnalysis] = []
-    T = max((expiry_date - dt.date.today()).days / 365.0, 0.0)
-    for _, row in chain.iterrows():
-        strike = float(row["strike"])
-        price = float(row["lastPrice"])
-        iv = float(row.get("impliedVolatility", 0.0))
-        d2 = black_scholes_d2(underlying, strike, T, r, iv)
-        pop = _norm_cdf(d2)
-        intrinsic = max(underlying - strike, 0.0)
-        time_value = max(price - intrinsic, 0.0)
-        results.append(
-            OptionAnalysis(
-                strike=strike,
-                last_price=price,
-                iv=iv,
-                expiry=expiry_date,
-                underlying_price=underlying,
-                pop=pop,
-                intrinsic_value=intrinsic,
-                time_value=time_value,
+    today = dt.date.today()
+    for expiry_str in expiry_strs:
+        expiry_date = dt.datetime.strptime(expiry_str, "%Y-%m-%d").date()
+        chain = ticker.option_chain(expiry_str).calls
+        days_to_expiry = max((expiry_date - today).days, 0)
+        T = days_to_expiry / 365.0
+        for _, row in chain.iterrows():
+            strike = float(row["strike"])
+            price = float(row["lastPrice"])
+            iv = float(row.get("impliedVolatility", 0.0))
+            d2 = black_scholes_d2(underlying, strike, T, r, iv)
+            pop = _norm_cdf(d2)
+            intrinsic = max(underlying - strike, 0.0)
+            time_value = max(price - intrinsic, 0.0)
+            results.append(
+                OptionAnalysis(
+                    strike=strike,
+                    last_price=price,
+                    iv=iv,
+                    expiry=expiry_date,
+                    underlying_price=underlying,
+                    pop=pop,
+                    intrinsic_value=intrinsic,
+                    time_value=time_value,
+                    days_to_expiry=days_to_expiry,
+                )
             )
-        )
     return results
+
+
+def filter_options_by_pop_and_timevalue_percent(
+    options: List[OptionAnalysis],
+    pop_threshold: float = 0.65,
+    tv_threshold: float = 0.25,
+) -> List[OptionAnalysis]:
+    """Filter options by probability of profit and time value percentage."""
+    filtered = []
+    for opt in options:
+        if opt.last_price == 0:
+            continue
+        tv_percent = opt.time_value / opt.last_price
+        if opt.pop > pop_threshold and tv_percent > tv_threshold:
+            filtered.append(opt)
+    filtered.sort(key=lambda o: o.pop, reverse=True)
+    return filtered
 
 
 def simulate_value_decay(
@@ -138,7 +177,9 @@ __all__ = [
     "OptionAnalysis",
     "black_scholes_price",
     "compute_option_metrics",
+    "get_expiries_by_market_days",
     "get_call_option_analysis",
+    "filter_options_by_pop_and_timevalue_percent",
     "simulate_value_decay",
 ]
 

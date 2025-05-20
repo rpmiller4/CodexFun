@@ -30,3 +30,4 @@ class OptionAnalysis:
     pop: float
     intrinsic_value: float
     time_value: float
+    days_to_expiry: int
