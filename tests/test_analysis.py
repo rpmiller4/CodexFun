@@ -1,6 +1,10 @@
 import datetime as dt
 import unittest
 
+import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
 import option_analysis as oa
 
 
