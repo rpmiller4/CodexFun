@@ -17,6 +17,11 @@ def _norm_cdf(x: float) -> float:
     return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
 
 
+def _valid_iv(iv: float | None, floor: float = 0.01) -> bool:
+    """Return True if iv is usable (not None/NaN/zero and ≥ floor)."""
+    return (iv is not None) and (iv >= floor) and (not math.isnan(iv))
+
+
 class SpreadType(str, Enum):
     BULL_PUT = "bull_put"
     BEAR_CALL = "bear_call"
@@ -74,6 +79,7 @@ def get_credit_spreads(
     expiry: str,
     width: float = 5.0,
     spread_type: SpreadType = SpreadType.BULL_PUT,
+    min_iv: float = 0.01,
 ) -> List[Spread]:
     """Return credit spreads for the given expiry and width."""
     ticker = yf.Ticker("SPY")
@@ -85,12 +91,15 @@ def get_credit_spreads(
     options = {}
     for _, row in df.iterrows():
         strike = float(row["strike"])
+        iv = float(row.get("impliedVolatility", 0.0))
+        if not _valid_iv(iv, min_iv):
+            continue
         opt = OptionContract(
             strike=strike,
             expiry=expiry_date,
             option_type="put" if spread_type == SpreadType.BULL_PUT else "call",
             last_price=float(row["lastPrice"]),
-            iv=float(row.get("impliedVolatility", 0.0)),
+            iv=iv,
             underlying_price=underlying,
         )
         options[strike] = opt
@@ -101,7 +110,11 @@ def get_credit_spreads(
         long = options.get(long_strike)
         if long is None:
             continue
-        if short.iv == 0 or long.iv == 0 or short.last_price == 0 or long.last_price == 0:
+        iv_short = short.iv
+        iv_long = long.iv
+        if not (_valid_iv(iv_short, min_iv) and _valid_iv(iv_long, min_iv)):
+            continue
+        if short.last_price == 0 or long.last_price == 0:
             continue
         spreads.append(make_spread(spread_type, short, long))
     return spreads

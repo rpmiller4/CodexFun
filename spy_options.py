@@ -108,7 +108,7 @@ def main(args: Optional[List[str]] = None) -> None:
                 ])
 
     for days in sorted(groups.keys()):
-        print(f"### Expiry \u2248 {days} Market Days")
+        print(f"### Expiry ~{days} Market Days")
         print("Strike | PoP | Time % | IV | Days")
         print("----------------------------------")
         for opt in groups[days]:

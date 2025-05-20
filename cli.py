@@ -17,6 +17,12 @@ def main(args: Optional[List[str]] = None) -> None:
     parser.add_argument("--pop", type=float, default=0.65)
     parser.add_argument("--credit", dest="credit_pct", type=float, default=25.0)
     parser.add_argument("--width", type=float, default=5.0)
+    parser.add_argument(
+        "--min-iv",
+        type=float,
+        default=0.01,
+        help="Skip contracts whose implied volatility is below this value",
+    )
     parsed = parser.parse_args(args)
 
     spread_type = SpreadType(parsed.type)
@@ -25,12 +31,17 @@ def main(args: Optional[List[str]] = None) -> None:
     header = "Bull-Put" if spread_type == SpreadType.BULL_PUT else "Bear-Call"
 
     for expiry in expiries:
-        spreads = get_credit_spreads(expiry, width=parsed.width, spread_type=spread_type)
+        spreads = get_credit_spreads(
+            expiry,
+            width=parsed.width,
+            spread_type=spread_type,
+            min_iv=parsed.min_iv,
+        )
         spreads = filter_credit_spreads(spreads, pop_min=parsed.pop, credit_min_pct=parsed.credit_pct)
         if not spreads:
             continue
         days = spreads[0].days_to_expiry
-        print(f"=== {header} Spreads \u2248 {days} Market Days ===")
+        print(f"=== {header} Spreads ~{days} Market Days ===")
         print(
             f"{'Short':>5} {'Long':>5} {'Credit':>7} {'MaxLoss':>8} {'Credit%':>8} {'PoP':>5} {'IVshort':>7} {'IVlong':>7} {'Days':>4}"
         )
