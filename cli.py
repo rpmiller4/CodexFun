@@ -1,0 +1,45 @@
+from __future__ import annotations
+
+import argparse
+from typing import List, Optional
+
+import option_analysis as oa
+from spread_analysis import SpreadType, get_credit_spreads, filter_credit_spreads
+
+
+def main(args: Optional[List[str]] = None) -> None:
+    parser = argparse.ArgumentParser(description="SPY credit-spread screener")
+    parser.add_argument(
+        "--type",
+        choices=[t.value for t in SpreadType],
+        default=SpreadType.BULL_PUT.value,
+    )
+    parser.add_argument("--pop", type=float, default=0.65)
+    parser.add_argument("--credit", dest="credit_pct", type=float, default=25.0)
+    parser.add_argument("--width", type=float, default=5.0)
+    parsed = parser.parse_args(args)
+
+    spread_type = SpreadType(parsed.type)
+    expiries = oa.get_expiries_by_market_days([3, 7, 14, 21])
+
+    header = "Bull-Put" if spread_type == SpreadType.BULL_PUT else "Bear-Call"
+
+    for expiry in expiries:
+        spreads = get_credit_spreads(expiry, width=parsed.width, spread_type=spread_type)
+        spreads = filter_credit_spreads(spreads, pop_min=parsed.pop, credit_min_pct=parsed.credit_pct)
+        if not spreads:
+            continue
+        days = spreads[0].days_to_expiry
+        print(f"=== {header} Spreads \u2248 {days} Market Days ===")
+        print(
+            f"{'Short':>5} {'Long':>5} {'Credit':>7} {'MaxLoss':>8} {'Credit%':>8} {'PoP':>5} {'IVshort':>7} {'IVlong':>7} {'Days':>4}"
+        )
+        for sp in spreads:
+            print(
+                f"{sp.short.strike:5.0f} {sp.long.strike:5.0f} {sp.credit:7.2f} {sp.max_loss:8.2f} {sp.credit_pct:8.1f}% {sp.pop:5.2f} {sp.short.iv:7.2f} {sp.long.iv:7.2f} {sp.days_to_expiry:4d}"
+            )
+        print()
+
+
+if __name__ == "__main__":
+    main()
