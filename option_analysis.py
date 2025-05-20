@@ -5,8 +5,9 @@ from __future__ import annotations
 
 import datetime as dt
 import math
-from dataclasses import dataclass
 from typing import List, Optional
+
+from models import OptionContract, OptionAnalysis
 
 import yfinance as yf
 
@@ -46,30 +47,6 @@ def black_scholes_d2(S: float, K: float, T: float, r: float, sigma: float) -> fl
     return d1 - sigma * math.sqrt(T)
 
 
-@dataclass
-class OptionContract:
-    """Simplified option contract description."""
-
-    strike: float
-    last_price: float
-    iv: float
-    expiry: dt.date
-    option_type: str  # "call" or "put"
-    underlying_price: float
-
-
-@dataclass
-class OptionAnalysis:
-    """Computed statistics for an option."""
-
-    strike: float
-    last_price: float
-    iv: float
-    expiry: dt.date
-    underlying_price: float
-    pop: float
-    intrinsic_value: float
-    time_value: float
 
 
 def compute_option_metrics(
@@ -87,7 +64,7 @@ def compute_option_metrics(
         intrinsic = max(option.underlying_price - option.strike, 0.0)
     else:
         intrinsic = max(option.strike - option.underlying_price, 0.0)
-    time_value = option.last_price - intrinsic
+    time_value = max(option.last_price - intrinsic, 0.0)
 
     return OptionAnalysis(
         strike=option.strike,
@@ -122,7 +99,7 @@ def get_call_option_analysis(r: float = 0.05) -> List[OptionAnalysis]:
         d2 = black_scholes_d2(underlying, strike, T, r, iv)
         pop = _norm_cdf(d2)
         intrinsic = max(underlying - strike, 0.0)
-        time_value = price - intrinsic
+        time_value = max(price - intrinsic, 0.0)
         results.append(
             OptionAnalysis(
                 strike=strike,
