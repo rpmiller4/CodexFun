@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 from typing import List, Optional
+
+import yfinance as yf
 
 import option_analysis as oa
 from spread_analysis import SpreadType, get_credit_spreads, filter_credit_spreads
+import expiry_selector
 
 
 def main(args: Optional[List[str]] = None) -> None:
@@ -21,6 +25,17 @@ def main(args: Optional[List[str]] = None) -> None:
     parser.add_argument("--credit", dest="credit_pct", type=float, default=25.0)
     parser.add_argument("--widths", nargs="+", type=float, default=[5.0])
     parser.add_argument(
+        "--expiry-dates",
+        nargs="+",
+        help="Explicit list of expiries (YYYY-MM-DD). Overrides --max-days",
+    )
+    parser.add_argument(
+        "--max-days",
+        type=int,
+        default=14,
+        help="Analyze every expiry up to this many calendar days ahead (default 14)",
+    )
+    parser.add_argument(
         "--min-iv",
         type=float,
         default=0.05,
@@ -33,9 +48,20 @@ def main(args: Optional[List[str]] = None) -> None:
     parsed = parser.parse_args(args)
 
     spread_type = SpreadType(parsed.type)
-    expiries = oa.get_expiries_by_market_days([3, 7, 14, 21])
+
+    ticker = yf.Ticker("SPY")
+    explicit_list = parsed.expiry_dates if parsed.expiry_dates else []
+    expiries = (
+        explicit_list
+        if explicit_list
+        else expiry_selector.expiries_within(ticker, max_days=parsed.max_days)
+    )
+    today = dt.date.today()
 
     for expiry in expiries:
+        days = (
+            dt.datetime.strptime(expiry, "%Y-%m-%d").date() - today
+        ).days
         for width in parsed.widths:
             spreads = get_credit_spreads(
                 expiry,
@@ -43,12 +69,11 @@ def main(args: Optional[List[str]] = None) -> None:
                 spread_type=spread_type,
                 min_iv=parsed.min_iv,
             )
-            spreads = filter_credit_spreads(
+            filtered = filter_credit_spreads(
                 spreads, pop_min=parsed.pop, credit_min_pct=parsed.credit_pct
             )
-            if not spreads:
+            if not filtered:
                 continue
-            days = spreads[0].days_to_expiry
             stype = spread_type.value
             print(
                 f"=== {stype.title()} Spreads ~{days} Days | Width ${width} ==="
@@ -56,7 +81,7 @@ def main(args: Optional[List[str]] = None) -> None:
             print(
                 f"{'Short':>5} {'Long':>5} {'Credit':>7} {'MaxLoss':>8} {'Credit%':>8} {'PoP':>5} {'IVs':>7} {'Src':>9} {'Days':>4}"
             )
-            for sp in spreads:
+            for sp in filtered:
                 ivs = f"{sp.short.iv:.2f}/{sp.long.iv:.2f}"
                 srcs = f"{sp.iv_short_src.value}/{sp.iv_long_src.value}"
                 print(
