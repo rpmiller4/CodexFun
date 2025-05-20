@@ -45,6 +45,7 @@ Output columns:
 | MaxLoss  | Maximum possible loss                     |
 | Credit%  | Credit as percentage of spread width      |
 | PoP      | Theoretical probability of profit         |
+| Edge     | Credit% multiplied by PoP                 |
 | IVs      | Short/long implied volatility values      |
 | Src      | IV sources for short/long legs            |
 | Days     | Calendar days to expiry                   |
