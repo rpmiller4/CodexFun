@@ -49,6 +49,24 @@ class OptionAnalysisTests(unittest.TestCase):
         self.assertGreater(time_values[0], time_values[1])
         self.assertGreater(time_values[1], time_values[2])
 
+    def test_days_to_expiry(self):
+        opt = self._make_option(435)
+        stats = oa.compute_option_metrics(opt, today=self.today)
+        self.assertEqual(stats.days_to_expiry, 21)
+
+    def test_filter_options_by_pop_and_timevalue_percent(self):
+        opt1 = self._make_option(420)
+        opt2 = self._make_option(435)
+        stats = [
+            oa.compute_option_metrics(opt1, today=self.today),
+            oa.compute_option_metrics(opt2, today=self.today),
+        ]
+        filtered = oa.filter_options_by_pop_and_timevalue_percent(
+            stats, pop_threshold=0.65, tv_threshold=0.25
+        )
+        self.assertEqual(len(filtered), 1)
+        self.assertAlmostEqual(filtered[0].strike, 420)
+
 
 if __name__ == "__main__":
     unittest.main()
