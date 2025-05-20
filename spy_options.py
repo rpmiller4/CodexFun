@@ -16,6 +16,7 @@ import argparse
 import csv
 
 from models import OptionContract
+from vol_utils import IVSource
 import option_analysis as oa
 
 import pandas as pd
@@ -67,6 +68,9 @@ def find_best_option(expiry: str, option_type: str = "call") -> Optional[OptionC
         expiry=dt.datetime.strptime(expiry, "%Y-%m-%d").date(),
         option_type=option_type,
         last_price=float(best["lastPrice"]),
+        iv=float(best.get("impliedVolatility", 0.0)),
+        iv_src=IVSource.ORIG,
+        underlying_price=price,
         open_interest=int(best["openInterest"]),
     )
 
