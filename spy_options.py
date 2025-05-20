@@ -10,21 +10,14 @@ Note: Internet access is required to fetch data from Yahoo Finance.
 from __future__ import annotations
 
 import datetime as dt
-from dataclasses import dataclass
 from typing import Optional
+
+from models import OptionContract
 
 import pandas as pd
 import yfinance as yf
 
 
-@dataclass
-class OptionContract:
-    symbol: str
-    strike: float
-    expiry: dt.date
-    option_type: str  # "call" or "put"
-    last_price: float
-    open_interest: int
 
 
 def get_latest_spy_price() -> float:
