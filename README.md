@@ -36,3 +36,15 @@ Example:
 ```bash
 python cli.py --type bull_put --pop 0.70 --credit 30
 ```
+
+### IV handling
+The screener replaces missing or near-zero implied volatility in two stages:
+
+| Source tag | Meaning |
+|------------|---------|
+| `orig` | IV came directly from Yahoo option chain |
+| `atm`  | Missing IV replaced by at-the-money IV for that expiry |
+| `vix`  | Still missing → replaced by VIX-based σ scaled to expiry |
+
+Use `--min-iv` (default 0.05) to set the minimum acceptable IV after fallback.
+

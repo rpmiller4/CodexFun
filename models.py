@@ -4,6 +4,8 @@ import datetime as dt
 from dataclasses import dataclass
 from typing import Optional
 
+from vol_utils import IVSource
+
 @dataclass
 class OptionContract:
     """Generic option contract information."""
@@ -13,6 +15,7 @@ class OptionContract:
     option_type: str  # "call" or "put"
     last_price: float
     iv: Optional[float] = None
+    iv_src: IVSource | None = None
     underlying_price: Optional[float] = None
     symbol: Optional[str] = None
     open_interest: Optional[int] = None

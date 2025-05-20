@@ -7,6 +7,8 @@ import datetime as dt
 import math
 from typing import List, Optional
 
+from vol_utils import resolve_iv, iv_is_valid, MIN_IV_DEFAULT
+
 import numpy as np
 
 from models import OptionContract, OptionAnalysis
@@ -106,7 +108,9 @@ def compute_option_metrics(
     )
 
 
-def get_call_option_analysis(expiry_strs: List[str], r: float = 0.05) -> List[OptionAnalysis]:
+def get_call_option_analysis(
+    expiry_strs: List[str], r: float = 0.05, min_iv: float = MIN_IV_DEFAULT
+) -> List[OptionAnalysis]:
     """Fetch SPY call options for the given expiries and compute metrics."""
     ticker = yf.Ticker("SPY")
     underlying = float(ticker.history(period="1d")["Close"].iloc[-1])
@@ -121,8 +125,9 @@ def get_call_option_analysis(expiry_strs: List[str], r: float = 0.05) -> List[Op
         for _, row in chain.iterrows():
             strike = float(row["strike"])
             price = float(row["lastPrice"])
-            iv = float(row.get("impliedVolatility", 0.0))
-            if not _valid_iv(iv):
+            raw_iv = float(row.get("impliedVolatility", 0.0))
+            iv, _ = resolve_iv(raw_iv, chain, underlying, days_to_expiry, min_iv)
+            if not iv_is_valid(iv, min_iv):
                 continue
             d2 = black_scholes_d2(underlying, strike, T, r, iv)
             pop = _norm_cdf(d2)

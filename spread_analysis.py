@@ -10,16 +10,12 @@ import yfinance as yf
 
 from models import OptionContract
 import option_analysis as oa
+from vol_utils import resolve_iv, iv_is_valid, MIN_IV_DEFAULT, IVSource
 
 
 def _norm_cdf(x: float) -> float:
     """Cumulative normal distribution function."""
     return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
-
-
-def _valid_iv(iv: float | None, floor: float = 0.01) -> bool:
-    """Return True if iv is usable (not None/NaN/zero and ≥ floor)."""
-    return (iv is not None) and (iv >= floor) and (not math.isnan(iv))
 
 
 class SpreadType(str, Enum):
@@ -37,6 +33,8 @@ class Spread:
     max_loss: float
     credit_pct: float
     pop: float
+    iv_short_src: IVSource
+    iv_long_src: IVSource
     days_to_expiry: int
 
 
@@ -71,6 +69,8 @@ def make_spread(
         max_loss=max_loss,
         credit_pct=credit_pct,
         pop=pop,
+        iv_short_src=short.iv_src,
+        iv_long_src=long.iv_src,
         days_to_expiry=days_to_expiry,
     )
 
@@ -79,7 +79,7 @@ def get_credit_spreads(
     expiry: str,
     width: float = 5.0,
     spread_type: SpreadType = SpreadType.BULL_PUT,
-    min_iv: float = 0.01,
+    min_iv: float = MIN_IV_DEFAULT,
 ) -> List[Spread]:
     """Return credit spreads for the given expiry and width."""
     ticker = yf.Ticker("SPY")
@@ -87,36 +87,39 @@ def get_credit_spreads(
     chain = ticker.option_chain(expiry)
     df = chain.puts if spread_type == SpreadType.BULL_PUT else chain.calls
     expiry_date = dt.datetime.strptime(expiry, "%Y-%m-%d").date()
+    today = dt.date.today()
 
     options = {}
     for _, row in df.iterrows():
         strike = float(row["strike"])
         iv = float(row.get("impliedVolatility", 0.0))
-        if not _valid_iv(iv, min_iv):
-            continue
         opt = OptionContract(
             strike=strike,
             expiry=expiry_date,
             option_type="put" if spread_type == SpreadType.BULL_PUT else "call",
             last_price=float(row["lastPrice"]),
             iv=iv,
+            iv_src=IVSource.ORIG,
             underlying_price=underlying,
         )
         options[strike] = opt
 
     spreads: List[Spread] = []
+    days = max((expiry_date - today).days, 0)
     for strike, short in options.items():
         long_strike = strike - width if spread_type == SpreadType.BULL_PUT else strike + width
         long = options.get(long_strike)
         if long is None:
             continue
-        iv_short = short.iv
-        iv_long = long.iv
-        if not (_valid_iv(iv_short, min_iv) and _valid_iv(iv_long, min_iv)):
+        ivS, srcS = resolve_iv(short.iv, df, underlying, days, min_iv)
+        ivL, srcL = resolve_iv(long.iv, df, underlying, days, min_iv)
+        if not (iv_is_valid(ivS, min_iv) and iv_is_valid(ivL, min_iv)):
             continue
         if short.last_price == 0 or long.last_price == 0:
             continue
-        spreads.append(make_spread(spread_type, short, long))
+        short_c = OptionContract(**{**short.__dict__, "iv": ivS, "iv_src": srcS})
+        long_c = OptionContract(**{**long.__dict__, "iv": ivL, "iv_src": srcL})
+        spreads.append(make_spread(spread_type, short_c, long_c, today=today))
     return spreads
 
 
