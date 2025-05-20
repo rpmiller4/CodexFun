@@ -54,6 +54,37 @@ class SpreadTests(unittest.TestCase):
         self.assertEqual(spreads[0], s1)
         self.assertEqual(len(spreads), 1)
 
+    def test_get_credit_spreads_skips_bad_iv(self):
+        import pandas as pd
+        from unittest.mock import patch
+
+        # fake option chain with zero IV on long leg
+        df = pd.DataFrame(
+            {
+                "strike": [100, 95],
+                "lastPrice": [2.0, 0.5],
+                "impliedVolatility": [0.25, 0.0],
+            }
+        )
+
+        class FakeChain:
+            def __init__(self, frame):
+                self.puts = frame
+                self.calls = frame
+
+        class FakeTicker:
+            def history(self, period="1d"):
+                return pd.DataFrame({"Close": [100.0]})
+
+            def option_chain(self, expiry):
+                return FakeChain(df)
+
+        with patch("yfinance.Ticker", return_value=FakeTicker()):
+            spreads = sa.get_credit_spreads(
+                "2099-01-01", width=5.0, spread_type=sa.SpreadType.BULL_PUT
+            )
+        self.assertEqual(len(spreads), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

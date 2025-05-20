@@ -19,6 +19,11 @@ def _norm_cdf(x: float) -> float:
     return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
 
 
+def _valid_iv(iv: float | None, floor: float = 0.01) -> bool:
+    """Return True if iv is usable (not None/NaN/zero and ≥ floor)."""
+    return (iv is not None) and (iv >= floor) and (not math.isnan(iv))
+
+
 def black_scholes_price(
     S: float,
     K: float,
@@ -117,6 +122,8 @@ def get_call_option_analysis(expiry_strs: List[str], r: float = 0.05) -> List[Op
             strike = float(row["strike"])
             price = float(row["lastPrice"])
             iv = float(row.get("impliedVolatility", 0.0))
+            if not _valid_iv(iv):
+                continue
             d2 = black_scholes_d2(underlying, strike, T, r, iv)
             pop = _norm_cdf(d2)
             intrinsic = max(underlying - strike, 0.0)
