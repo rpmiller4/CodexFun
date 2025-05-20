@@ -75,6 +75,17 @@ def get_expiries_by_market_days(targets: List[int] = [3, 7, 14, 21]) -> List[str
     return selected
 
 
+def expiries_within(max_days: int = 14) -> List[str]:
+    """Return all SPY expiries within ``max_days`` calendar days."""
+    ticker = yf.Ticker("SPY")
+    expiries = ticker.options
+    today = dt.date.today()
+    expiry_dates = [dt.datetime.strptime(e, "%Y-%m-%d").date() for e in expiries]
+    selected = [exp for exp in expiry_dates if 0 <= (exp - today).days <= max_days]
+    selected.sort()
+    return [d.strftime("%Y-%m-%d") for d in selected]
+
+
 
 
 def compute_option_metrics(
@@ -189,6 +200,7 @@ __all__ = [
     "OptionAnalysis",
     "black_scholes_price",
     "compute_option_metrics",
+    "expiries_within",
     "get_expiries_by_market_days",
     "get_call_option_analysis",
     "filter_options_by_pop_and_timevalue_percent",
