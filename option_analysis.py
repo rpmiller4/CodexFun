@@ -14,6 +14,7 @@ import numpy as np
 from models import OptionContract, OptionAnalysis
 
 import yfinance as yf
+from utils import fetch_with_retry
 
 
 def _norm_cdf(x: float) -> float:
@@ -59,7 +60,7 @@ def black_scholes_d2(S: float, K: float, T: float, r: float, sigma: float) -> fl
 def get_expiries_by_market_days(targets: List[int] = [3, 7, 14, 21]) -> List[str]:
     """Return expiry strings matching the provided market-day targets."""
     ticker = yf.Ticker("SPY")
-    expiries = ticker.options
+    expiries = fetch_with_retry(lambda: ticker.options)
     today = dt.date.today()
     expiry_dates = [dt.datetime.strptime(e, "%Y-%m-%d").date() for e in expiries]
 
@@ -78,7 +79,7 @@ def get_expiries_by_market_days(targets: List[int] = [3, 7, 14, 21]) -> List[str
 def expiries_within(max_days: int = 14) -> List[str]:
     """Return all SPY expiries within ``max_days`` calendar days."""
     ticker = yf.Ticker("SPY")
-    expiries = ticker.options
+    expiries = fetch_with_retry(lambda: ticker.options)
     today = dt.date.today()
     expiry_dates = [dt.datetime.strptime(e, "%Y-%m-%d").date() for e in expiries]
     selected = [exp for exp in expiry_dates if 0 <= (exp - today).days <= max_days]
@@ -124,13 +125,13 @@ def get_call_option_analysis(
 ) -> List[OptionAnalysis]:
     """Fetch SPY call options for the given expiries and compute metrics."""
     ticker = yf.Ticker("SPY")
-    underlying = float(ticker.history(period="1d")["Close"].iloc[-1])
+    underlying = float(fetch_with_retry(ticker.history, period="1d")["Close"].iloc[-1])
 
     results: List[OptionAnalysis] = []
     today = dt.date.today()
     for expiry_str in expiry_strs:
         expiry_date = dt.datetime.strptime(expiry_str, "%Y-%m-%d").date()
-        chain = ticker.option_chain(expiry_str).calls
+        chain = fetch_with_retry(ticker.option_chain, expiry_str).calls
         days_to_expiry = max((expiry_date - today).days, 0)
         T = days_to_expiry / 365.0
         for _, row in chain.iterrows():

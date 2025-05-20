@@ -35,6 +35,18 @@ The `cli.py` script screens SPY bull-put or bear-call credit spreads.  Provide o
 python cli.py --type bull_put --widths 2 5 10 --pop 0.7 --credit 25 --min-iv 0.05
 ```
 
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--widths` | Spread widths to evaluate (default `2 3 5`) |
+| `--pop` | Minimum probability of profit |
+| `--credit` | Minimum credit percent of width |
+| `--min-iv` | Minimum acceptable implied volatility |
+| `--sigma-floor` | Floor for VIX-derived volatility (default 0.12) |
+| `--show-sigma` | Display σ column in output |
+| `--log-file` | Path for run log TSV |
+
 Output columns:
 
 | Column   | Meaning                                   |
@@ -45,10 +57,20 @@ Output columns:
 | MaxLoss  | Maximum possible loss                     |
 | Credit%  | Credit as percentage of spread width      |
 | PoP      | Theoretical probability of profit         |
-| Edge     | Credit% multiplied by PoP                 |
+| σ        | Volatility used for PoP calculation       |
+| EV       | Expected value of the spread              |
 | IVs      | Short/long implied volatility values      |
 | Src      | IV sources for short/long legs            |
 | Days     | Calendar days to expiry                   |
+
+Values in the σ column are highlighted yellow when below 10%. The EV column
+uses the formula:
+
+```
+win = credit * pop
+loss = (width - credit) * (1 - pop)
+EV = win - loss
+```
 
 ### IV handling
 
@@ -61,6 +83,8 @@ Missing or too-low implied volatility is replaced in stages:
 | `vix`  | Still missing → replaced by VIX-based σ scaled to expiry |
 
 Use `--min-iv` to change the minimum acceptable IV (default `0.05`).
+Use `--sigma-floor` to override the hard minimum volatility applied when
+falling back to the VIX (default `0.12`).
 
 ### Expiry selection
 By default the screener scans *every* listed SPY expiry within the next **14 calendar days**:

@@ -140,7 +140,7 @@ class SpreadTests(unittest.TestCase):
         self.assertEqual(s5.iv_short_src, sa.IVSource.VIX)
         self.assertEqual(s5.iv_long_src, sa.IVSource.VIX)
 
-    def test_filter_sorted_by_edge(self):
+    def test_filter_sorted_by_ev(self):
         short_a = self._make_option(99, 2.0)
         long_a = self._make_option(94, 0.5)
         s_a = sa.make_spread(sa.SpreadType.BULL_PUT, short_a, long_a, today=self.today)

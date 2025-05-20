@@ -6,6 +6,8 @@ from enum import Enum
 import numpy as np
 import yfinance as yf
 
+from utils import capped_sigma, fetch_with_retry, MIN_SIGMA
+
 MIN_IV_DEFAULT = 0.05  # 5 %
 
 class IVSource(str, Enum):
@@ -27,22 +29,27 @@ def get_atm_iv(chain_df, spot):
     return float(chain_df.loc[idx, "impliedVolatility"])
 
 
-def vix_sigma(days: int) -> float:
-    """Convert ^VIX (%) to annual sigma scaled to days-to-expiry."""
-    vix_pct = yf.Ticker("^VIX").history(period="1d")["Close"].iloc[-1] / 100.0
-    return vix_pct * math.sqrt(days / 30.0)
+def vix_sigma(days: int, floor: float = MIN_SIGMA) -> float:
+    """Convert ^VIX (%) to annual sigma scaled to days-to-expiry with floor."""
+    vix_df = fetch_with_retry(yf.Ticker("^VIX").history, period="1d")
+    vix_pct = vix_df["Close"].iloc[-1] / 100.0
+    raw = vix_pct * math.sqrt(days / 30.0)
+    return capped_sigma(raw, floor)
 
 
-def resolve_iv(raw_iv: float,
-               chain_df,
-               spot: float,
-               days: int,
-               floor: float = MIN_IV_DEFAULT):
+def resolve_iv(
+    raw_iv: float,
+    chain_df,
+    spot: float,
+    days: int,
+    floor: float = MIN_IV_DEFAULT,
+    sigma_floor: float = MIN_SIGMA,
+):
     """Return (iv, IVSource) after fallback: raw -> ATM -> VIX."""
     if iv_is_valid(raw_iv, floor):
         return raw_iv, IVSource.ORIG
     iv = get_atm_iv(chain_df, spot)
     if iv_is_valid(iv, floor):
         return iv, IVSource.ATM
-    iv = vix_sigma(days)
+    iv = vix_sigma(days, floor=sigma_floor)
     return iv, IVSource.VIX

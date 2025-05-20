@@ -1,3 +1,5 @@
 pandas
 yfinance
 pytest
+colorama>=0.4
+click>=8

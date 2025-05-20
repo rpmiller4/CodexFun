@@ -22,13 +22,15 @@ import option_analysis as oa
 import pandas as pd
 import yfinance as yf
 
+from utils import fetch_with_retry
+
 
 
 
 def get_latest_spy_price() -> float:
     """Return the latest SPY price using yfinance."""
     ticker = yf.Ticker("SPY")
-    data = ticker.history(period="1d")
+    data = fetch_with_retry(ticker.history, period="1d")
     if data.empty:
         raise RuntimeError("No data returned for SPY")
     return float(data["Close"].iloc[-1])
@@ -37,7 +39,7 @@ def get_latest_spy_price() -> float:
 def get_options_chain(expiry: str) -> pd.DataFrame:
     """Return the options chain for SPY for the given expiry date."""
     ticker = yf.Ticker("SPY")
-    opt = ticker.option_chain(expiry)
+    opt = fetch_with_retry(ticker.option_chain, expiry)
     calls = opt.calls.assign(option_type="call")
     puts = opt.puts.assign(option_type="put")
     chain = pd.concat([calls, puts], ignore_index=True)
