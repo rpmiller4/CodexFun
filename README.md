@@ -26,3 +26,13 @@ python spy_options.py
 
 By default the script chooses the closest expiry and prints the best call
 option based on the simple heuristic above.
+
+## Credit-spread screener
+
+The `cli.py` script screens SPY bull-put or bear-call credit spreads by probability-of-profit and credit percentage.
+
+Example:
+
+```bash
+python cli.py --type bull_put --pop 0.70 --credit 30
+```
