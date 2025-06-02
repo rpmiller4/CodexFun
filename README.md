@@ -95,3 +95,15 @@ python cli.py --max-days 30    # widen window to 30 days
 python cli.py --expiry-dates 2025-06-05 2025-06-21  # override with explicit list
 ```
 
+## Synthetic Market Simulation
+
+The `synthetic_market` module can now generate price paths with optional
+features:
+
+- **AR(1) autocorrelation** via the `ar1` parameter.
+- **Volatility clustering** controlled by `vol_cluster`.
+- **Nonlinear price reaction** using the `reaction` exponent.
+
+Use `run_simulation_multi` to evaluate a configuration over multiple random
+seeds and analyse the distribution of returns.
+
