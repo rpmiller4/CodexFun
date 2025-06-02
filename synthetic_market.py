@@ -47,6 +47,10 @@ DEFAULT_CONFIG: Dict[str, object] = {
     "option_spacing": 1,
     "expiry_days": 10,
     "seed": 123,
+    # optional price dynamics parameters
+    "ar1": 0.0,  # autocorrelation coefficient
+    "vol_cluster": 0.0,  # volatility clustering weight
+    "reaction": 1.0,  # nonlinear reaction exponent
 }
 
 
@@ -57,17 +61,49 @@ def simulate_prices(
     mu: float,
     sigma: float,
     seed: int = 0,
+    ar1: float = 0.0,
+    vol_cluster: float = 0.0,
+    reaction: float = 1.0,
 ) -> pd.DataFrame:
-    """Return DataFrame of simulated prices using geometric Brownian motion."""
+    """Return DataFrame of simulated prices.
+
+    The base process is geometric Brownian motion. Optional parameters allow
+    adding AR(1) autocorrelation (``ar1``), volatility clustering via a simple
+    GARCH(1,1)-like term (``vol_cluster``), and a nonlinear price reaction
+    exponent (``reaction``).
+    """
+
     rng = np.random.default_rng(seed)
     dates = pd.date_range(start_date, end_date, freq="D")
     n = len(dates)
     dt_frac = 1 / 252.0
     prices = np.empty(n)
     prices[0] = start_price
+    prev_ret = 0.0
+    variance = sigma ** 2
     for i in range(1, n):
+        # update volatility based on previous return if clustering enabled
+        if vol_cluster > 0:
+            variance = (1 - vol_cluster) * (sigma ** 2) + vol_cluster * (prev_ret ** 2)
+            sigma_t = np.sqrt(variance)
+        else:
+            sigma_t = sigma
+
         z = rng.standard_normal()
-        prices[i] = prices[i - 1] * np.exp((mu - 0.5 * sigma ** 2) * dt_frac + sigma * np.sqrt(dt_frac) * z)
+        ret = (mu - 0.5 * sigma_t ** 2) * dt_frac + sigma_t * np.sqrt(dt_frac) * z
+
+        # add AR(1) autocorrelation
+        if ar1 != 0.0:
+            ret += ar1 * prev_ret
+
+        # apply nonlinear reaction
+        if reaction != 1.0:
+            sign = np.sign(ret)
+            ret = sign * (abs(ret) ** reaction)
+
+        prices[i] = prices[i - 1] * np.exp(ret)
+        prev_ret = ret
+
     return pd.DataFrame({"Date": dates.date, "Close": prices})
 
 
@@ -87,6 +123,9 @@ def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
         mu=float(cfg["mu"]),
         sigma=float(cfg["sigma"]),
         seed=int(cfg.get("seed", 0)),
+        ar1=float(cfg.get("ar1", 0.0)),
+        vol_cluster=float(cfg.get("vol_cluster", 0.0)),
+        reaction=float(cfg.get("reaction", 1.0)),
     )
     prices["EMA"] = compute_ema(prices["Close"], int(cfg["ema_period"]))
 
@@ -194,10 +233,30 @@ def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
     )
 
 
+def run_simulation_multi(
+    config: Dict[str, object] | None = None,
+    seeds: List[int] | None = None,
+) -> pd.DataFrame:
+    """Run ``run_simulation`` across multiple seeds and return a DataFrame of summary stats."""
+    seeds = seeds or list(range(20))
+    rows = []
+    for s in seeds:
+        cfg = {**(config or {}), "seed": s}
+        res = run_simulation(cfg)
+        rows.append({
+            "seed": s,
+            "total_return": res.total_return,
+            "max_drawdown": res.max_drawdown,
+            "win_rate": res.win_rate,
+        })
+    return pd.DataFrame(rows)
+
+
 __all__ = [
     "simulate_prices",
     "compute_ema",
     "run_simulation",
+    "run_simulation_multi",
     "Trade",
     "SimulationResult",
 ]
