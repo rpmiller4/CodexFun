@@ -38,6 +38,12 @@ DEFAULT_CONFIG: Dict[str, object] = {
     "end_date": "2025-12-31",
     "mu": 0.07,
     "sigma": 0.20,
+    "vol_model": "gbm",  # "gbm" or "heston"
+    "kappa": 1.5,
+    "theta": 0.04,
+    "xi": 0.3,
+    "rho": -0.7,
+    "v0": 0.04,
     "ema_period": 50,
     "risk_fraction": 0.03,
     "max_lots": 6,
@@ -71,6 +77,53 @@ def simulate_prices(
     return pd.DataFrame({"Date": dates.date, "Close": prices})
 
 
+def heston_path(
+    mu: float,
+    r: float,
+    kappa: float,
+    theta: float,
+    xi: float,
+    rho: float,
+    v0: float,
+    s0: float,
+    dt_frac: float,
+    steps: int,
+    seed: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return price and variance paths using Euler-Milstein discretisation."""
+    rng = np.random.default_rng(seed)
+    z1 = rng.standard_normal(steps)
+    z2 = rho * z1 + np.sqrt(1 - rho ** 2) * rng.standard_normal(steps)
+    v = np.empty(steps + 1)
+    s = np.empty(steps + 1)
+    v[0] = v0
+    s[0] = s0
+    for t in range(steps):
+        v[t + 1] = np.abs(v[t] + kappa * (theta - v[t]) * dt_frac + xi * np.sqrt(v[t] * dt_frac) * z2[t])
+        s[t + 1] = s[t] * np.exp((r - 0.5 * v[t]) * dt_frac + np.sqrt(v[t] * dt_frac) * z1[t])
+    return s, v
+
+
+def simulate_prices_heston(
+    start_price: float,
+    start_date: dt.date,
+    end_date: dt.date,
+    mu: float,
+    kappa: float,
+    theta: float,
+    xi: float,
+    rho: float,
+    v0: float,
+    seed: int = 0,
+) -> pd.DataFrame:
+    """Return DataFrame of prices simulated via the Heston model."""
+    dates = pd.date_range(start_date, end_date, freq="D")
+    steps = len(dates) - 1
+    dt_frac = 1 / 252.0
+    s, _ = heston_path(mu, mu, kappa, theta, xi, rho, v0, start_price, dt_frac, steps, seed)
+    return pd.DataFrame({"Date": dates.date, "Close": s})
+
+
 def compute_ema(series: pd.Series, period: int) -> pd.Series:
     """Return exponential moving average for ``series``."""
     return series.ewm(span=period, adjust=False).mean()
@@ -80,14 +133,28 @@ def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
     cfg = {**DEFAULT_CONFIG, **(config or {})}
     start_date = dt.datetime.strptime(str(cfg["start_date"]), "%Y-%m-%d").date()
     end_date = dt.datetime.strptime(str(cfg["end_date"]), "%Y-%m-%d").date()
-    prices = simulate_prices(
-        start_price=float(cfg["start_price"]),
-        start_date=start_date,
-        end_date=end_date,
-        mu=float(cfg["mu"]),
-        sigma=float(cfg["sigma"]),
-        seed=int(cfg.get("seed", 0)),
-    )
+    if cfg.get("vol_model") == "heston":
+        prices = simulate_prices_heston(
+            start_price=float(cfg["start_price"]),
+            start_date=start_date,
+            end_date=end_date,
+            mu=float(cfg["mu"]),
+            kappa=float(cfg["kappa"]),
+            theta=float(cfg["theta"]),
+            xi=float(cfg["xi"]),
+            rho=float(cfg["rho"]),
+            v0=float(cfg["v0"]),
+            seed=int(cfg.get("seed", 0)),
+        )
+    else:
+        prices = simulate_prices(
+            start_price=float(cfg["start_price"]),
+            start_date=start_date,
+            end_date=end_date,
+            mu=float(cfg["mu"]),
+            sigma=float(cfg["sigma"]),
+            seed=int(cfg.get("seed", 0)),
+        )
     prices["EMA"] = compute_ema(prices["Close"], int(cfg["ema_period"]))
 
     capital = 10000.0
@@ -196,6 +263,8 @@ def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
 
 __all__ = [
     "simulate_prices",
+    "simulate_prices_heston",
+    "heston_path",
     "compute_ema",
     "run_simulation",
     "Trade",
