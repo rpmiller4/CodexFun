@@ -61,6 +61,14 @@ DEFAULT_CONFIG: Dict[str, object] = {
     "vol_cluster": 0.0,  # volatility clustering weight
     "reaction": 1.0,  # nonlinear reaction exponent
     "liq_decay": 12,
+    "use_heston": False,
+    "heston": {
+        "v0": 0.04,
+        "kappa": 1.5,
+        "theta": 0.04,
+        "xi": 0.5,
+        "rho": -0.7,
+    },
     "realism": {
         "slippage": False,
         "liquidity": False,
@@ -140,6 +148,42 @@ def simulate_prices(
     return pd.DataFrame({"Date": dates.date, "Close": prices, "Jump": jumps})
 
 
+def simulate_heston_prices(cfg: Dict[str, object]) -> pd.DataFrame:
+    """Return DataFrame of prices/variance following the Heston model."""
+    start_date = dt.datetime.strptime(str(cfg["start_date"]), "%Y-%m-%d").date()
+    end_date = dt.datetime.strptime(str(cfg["end_date"]), "%Y-%m-%d").date()
+    dates = pd.date_range(start_date, end_date, freq="D")
+    n = len(dates)
+    dt_frac = 1 / 252.0
+    h = cfg.get("heston", {})
+    s0 = float(cfg.get("start_price", 100.0))
+    v0 = float(h.get("v0", 0.04))
+    kappa = float(h.get("kappa", 1.5))
+    theta = float(h.get("theta", 0.04))
+    xi = float(h.get("xi", 0.5))
+    rho = float(h.get("rho", -0.7))
+    mu = float(cfg.get("mu", 0.0))
+    seed = int(cfg.get("seed", 0))
+    rng = np.random.default_rng(seed)
+
+    prices = np.empty(n)
+    variances = np.empty(n)
+    prices[0] = s0
+    variances[0] = v0
+    for i in range(1, n):
+        z1 = rng.standard_normal()
+        z2 = rng.standard_normal()
+        z2 = rho * z1 + math.sqrt(1 - rho ** 2) * z2
+        v_prev = max(variances[i - 1], 0.0)
+        v = v_prev + kappa * (theta - v_prev) * dt_frac + xi * math.sqrt(v_prev) * math.sqrt(dt_frac) * z2
+        v = max(v, 0.0)
+        variances[i] = v
+        ret = (mu - 0.5 * v_prev) * dt_frac + math.sqrt(v_prev) * math.sqrt(dt_frac) * z1
+        prices[i] = prices[i - 1] * math.exp(ret)
+
+    return pd.DataFrame({"Date": dates.date, "Close": prices, "Var": variances})
+
+
 def compute_ema(series: pd.Series, period: int) -> pd.Series:
     """Return exponential moving average for ``series``."""
     return series.ewm(span=period, adjust=False).mean()
@@ -183,20 +227,23 @@ def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
     cfg["realism"] = realism_cfg
     start_date = dt.datetime.strptime(str(cfg["start_date"]), "%Y-%m-%d").date()
     end_date = dt.datetime.strptime(str(cfg["end_date"]), "%Y-%m-%d").date()
-    prices = simulate_prices(
-        start_price=float(cfg["start_price"]),
-        start_date=start_date,
-        end_date=end_date,
-        mu=float(cfg["mu"]),
-        sigma=float(cfg["sigma"]),
-        seed=int(cfg.get("seed", 0)),
-        ar1=float(cfg.get("ar1", 0.0)),
-        vol_cluster=float(cfg.get("vol_cluster", 0.0)),
-        reaction=float(cfg.get("reaction", 1.0)),
-        jump_prob=float(realism_cfg.get("jump_prob", 0.01)) if realism_cfg.get("jumps") else 0.0,
-        down_jump=float(realism_cfg.get("down_jump", -0.08)),
-        up_jump=float(realism_cfg.get("up_jump", 0.04)),
-    )
+    if cfg.get("use_heston", False):
+        prices = simulate_heston_prices(cfg)
+    else:
+        prices = simulate_prices(
+            start_price=float(cfg["start_price"]),
+            start_date=start_date,
+            end_date=end_date,
+            mu=float(cfg["mu"]),
+            sigma=float(cfg["sigma"]),
+            seed=int(cfg.get("seed", 0)),
+            ar1=float(cfg.get("ar1", 0.0)),
+            vol_cluster=float(cfg.get("vol_cluster", 0.0)),
+            reaction=float(cfg.get("reaction", 1.0)),
+            jump_prob=float(realism_cfg.get("jump_prob", 0.01)) if realism_cfg.get("jumps") else 0.0,
+            down_jump=float(realism_cfg.get("down_jump", -0.08)),
+            up_jump=float(realism_cfg.get("up_jump", 0.04)),
+        )
     prices["EMA"] = compute_ema(prices["Close"], int(cfg["ema_period"]))
 
     capital = 10000.0
@@ -216,11 +263,13 @@ def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
     max_lots = int(cfg["max_lots"])
     base_sigma = float(cfg["sigma"])
     bs_cache: Dict[tuple, float] = {}
+    use_var = "Var" in prices.columns
 
     for idx, row in prices.iterrows():
         current_date = row["Date"]
         price = float(row["Close"])
         ema = float(row["EMA"])
+        sigma_row = math.sqrt(row["Var"]) if use_var else base_sigma
 
         # expire trades first
         remaining = []
@@ -254,8 +303,8 @@ def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
             for t in open_trades:
                 T = max((t.expiry_date - current_date).days, 0) / 365.0
                 opt_type = "put" if t.trade_type == "bull_put" else "call"
-                iv_s = imp_vol(price - t.short_strike, base_sigma)
-                iv_l = imp_vol(price - t.long_strike, base_sigma)
+                iv_s = imp_vol(price - t.short_strike, sigma_row)
+                iv_l = imp_vol(price - t.long_strike, sigma_row)
                 s_p = _bs_cached(bs_cache, price, t.short_strike, T, iv_s, opt_type)
                 l_p = _bs_cached(bs_cache, price, t.long_strike, T, iv_l, opt_type)
                 spread_val = (s_p - l_p) * 100 * t.lots
@@ -297,8 +346,8 @@ def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
             for t in open_trades:
                 T = max((t.expiry_date - current_date).days, 0) / 365.0
                 opt_type = "put" if t.trade_type == "bull_put" else "call"
-                iv_s = imp_vol(price - t.short_strike, base_sigma)
-                iv_l = imp_vol(price - t.long_strike, base_sigma)
+                iv_s = imp_vol(price - t.short_strike, sigma_row)
+                iv_l = imp_vol(price - t.long_strike, sigma_row)
                 s_p = _bs_cached(bs_cache, price, t.short_strike, T, iv_s, opt_type)
                 l_p = _bs_cached(bs_cache, price, t.long_strike, T, iv_l, opt_type)
                 spread_val = (s_p - l_p) * 100 * t.lots
@@ -329,8 +378,8 @@ def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
             if realism_cfg.get("iv_pricing"):
                 T = expiry_days / 365.0
                 opt_type = "put" if trade_type == "bull_put" else "call"
-                iv_s = imp_vol(price - short_strike, base_sigma)
-                iv_l = imp_vol(price - long_strike, base_sigma)
+                iv_s = imp_vol(price - short_strike, sigma_row)
+                iv_l = imp_vol(price - long_strike, sigma_row)
                 short_p = _bs_cached(bs_cache, price, short_strike, T, iv_s, opt_type)
                 long_p = _bs_cached(bs_cache, price, long_strike, T, iv_l, opt_type)
                 credit = (short_p - long_p) * 100
@@ -457,6 +506,7 @@ def generate_crash_path(start_price: float, days: int) -> pd.DataFrame:
 
 __all__ = [
     "simulate_prices",
+    "simulate_heston_prices",
     "compute_ema",
     "credit_ratio",
     "quote_spread",

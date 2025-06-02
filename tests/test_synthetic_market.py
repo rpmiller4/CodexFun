@@ -4,6 +4,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import synthetic_market as sm
+import numpy as np
 import datetime as dt
 
 class SyntheticMarketTests(unittest.TestCase):
@@ -55,6 +56,23 @@ class SyntheticMarketTests(unittest.TestCase):
         expected = sum((1.5 + 0.65 * (t.lots * 2)) * 2 for t in with_comm.trades)
         diff = no_comm.equity_curve["Equity"].iloc[-1] - with_comm.equity_curve["Equity"].iloc[-1]
         self.assertAlmostEqual(diff, expected, places=2)
+
+    def test_heston_path_properties(self):
+        cfg = {
+            "start_price": 100.0,
+            "start_date": "2023-01-01",
+            "end_date": "2023-03-01",
+            "mu": 0.05,
+            "sigma": 0.2,
+            "seed": 0,
+            "use_heston": True,
+            "heston": sm.DEFAULT_CONFIG["heston"],
+        }
+        prices = sm.simulate_heston_prices(cfg)
+        n_days = (dt.datetime.strptime(cfg["end_date"], "%Y-%m-%d").date() - dt.datetime.strptime(cfg["start_date"], "%Y-%m-%d").date()).days + 1
+        self.assertEqual(len(prices), n_days)
+        self.assertTrue((prices["Var"] >= 0).all())
+        self.assertGreater(np.std(np.diff(prices["Var"])), 0)
 
 if __name__ == '__main__':
     unittest.main()
