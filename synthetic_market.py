@@ -20,6 +20,7 @@ class Trade:
     width: float
     credit: float
     lots: int
+    commission: float = 0.0
     result: float | None = None  # P&L realized at expiry
 
 
@@ -44,6 +45,8 @@ DEFAULT_CONFIG: Dict[str, object] = {
     "short_leg_distance": (10, 15),
     "spread_width_range": (1, 8),
     "trade_credit_ratio": 0.30,
+    "credit_curve": False,
+    "commissions": False,
     "option_spacing": 1,
     "expiry_days": 10,
     "seed": 123,
@@ -112,6 +115,15 @@ def compute_ema(series: pd.Series, period: int) -> pd.Series:
     return series.ewm(span=period, adjust=False).mean()
 
 
+def credit_ratio(dist: float, width: float) -> float:
+    """Return credit ratio based on distance and width.
+
+    Linearly fades from 0.45 at the money to 0.15 for very far strikes.
+    """
+    ratio = 0.45 - 0.3 * min(dist / max(width, 1.0), 1.0)
+    return float(np.clip(ratio, 0.15, 0.45))
+
+
 def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
     cfg = {**DEFAULT_CONFIG, **(config or {})}
     start_date = dt.datetime.strptime(str(cfg["start_date"]), "%Y-%m-%d").date()
@@ -137,7 +149,9 @@ def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
     spacing = float(cfg["option_spacing"])
     dist_low, dist_high = cfg["short_leg_distance"]
     width_low, width_high = cfg["spread_width_range"]
-    credit_ratio = float(cfg["trade_credit_ratio"])
+    credit_ratio_fixed = float(cfg["trade_credit_ratio"])
+    use_curve = bool(cfg.get("credit_curve", False))
+    use_commissions = bool(cfg.get("commissions", False))
     expiry_days = int(cfg["expiry_days"])
     risk_frac = float(cfg["risk_fraction"])
     max_lots = int(cfg["max_lots"])
@@ -155,11 +169,17 @@ def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
                     breached = price <= t.short_strike
                 else:
                     breached = price >= t.short_strike
+                close_comm = t.commission if use_commissions else 0.0
                 if breached:
-                    capital -= t.width * 100 * t.lots
-                    t.result = -((t.width * 100 - t.credit) * t.lots)
+                    capital -= t.width * 100 * t.lots + close_comm
+                    t.result = -((t.width * 100 - t.credit) * t.lots) - (
+                        2 * t.commission if use_commissions else 0.0
+                    )
                 else:
-                    t.result = t.credit * t.lots
+                    capital -= close_comm
+                    t.result = t.credit * t.lots - (
+                        2 * t.commission if use_commissions else 0.0
+                    )
                 trades.append(t)
             else:
                 remaining.append(t)
@@ -181,12 +201,14 @@ def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
                 short_strike = price + dist
                 short_strike = np.ceil(short_strike / spacing) * spacing
                 long_strike = short_strike + width
-            credit = credit_ratio * width * 100
+            ratio_val = credit_ratio(dist, width) if use_curve else credit_ratio_fixed
+            credit = ratio_val * width * 100
             max_loss_per_lot = width * 100 - credit
             budget = capital * risk_frac
             lots = int(min(max_lots, np.floor(budget / max_loss_per_lot)))
             if lots >= 1:
-                capital += credit * lots
+                commission = 1.5 + 0.65 * (lots * 2) if use_commissions else 0.0
+                capital += credit * lots - commission
                 t = Trade(
                     open_date=current_date,
                     expiry_date=current_date + dt.timedelta(days=expiry_days),
@@ -196,6 +218,7 @@ def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
                     width=float(width),
                     credit=credit,
                     lots=lots,
+                    commission=commission,
                 )
                 open_trades.append(t)
     # finalize any trades after last date
@@ -206,15 +229,23 @@ def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
             breached = last_price <= t.short_strike
         else:
             breached = last_price >= t.short_strike
+        close_comm = t.commission if use_commissions else 0.0
         if breached:
-            capital -= t.width * 100 * t.lots
-            t.result = -((t.width * 100 - t.credit) * t.lots)
+            capital -= t.width * 100 * t.lots + close_comm
+            t.result = -((t.width * 100 - t.credit) * t.lots) - (
+                2 * t.commission if use_commissions else 0.0
+            )
         else:
-            t.result = t.credit * t.lots
+            capital -= close_comm
+            t.result = t.credit * t.lots - (
+                2 * t.commission if use_commissions else 0.0
+            )
         trades.append(t)
         equity.append((final_date, capital))
 
-    equity_df = pd.DataFrame(equity, columns=["Date", "Equity"]).drop_duplicates("Date").reset_index(drop=True)
+    equity_df = (
+        pd.DataFrame(equity, columns=["Date", "Equity"]).drop_duplicates("Date", keep="last").reset_index(drop=True)
+    )
     returns = equity_df["Equity"].pct_change().fillna(0)
     cumulative = (1 + returns).cumprod()
     peak = cumulative.cummax()
@@ -255,6 +286,7 @@ def run_simulation_multi(
 __all__ = [
     "simulate_prices",
     "compute_ema",
+    "credit_ratio",
     "run_simulation",
     "run_simulation_multi",
     "Trade",
@@ -279,6 +311,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--short_leg_distance", nargs=2, type=float)
     parser.add_argument("--spread_width_range", nargs=2, type=int)
     parser.add_argument("--trade_credit_ratio", type=float)
+    parser.add_argument("--credit_curve", action="store_true")
+    parser.add_argument("--commissions", action="store_true")
     parser.add_argument("--option_spacing", type=float)
     parser.add_argument("--expiry_days", type=int)
     parser.add_argument("--seed", type=int)
@@ -299,6 +333,8 @@ def main(argv: list[str] | None = None) -> None:
         "short_leg_distance",
         "spread_width_range",
         "trade_credit_ratio",
+        "credit_curve",
+        "commissions",
         "option_spacing",
         "expiry_days",
         "seed",

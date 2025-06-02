@@ -36,5 +36,25 @@ class SyntheticMarketTests(unittest.TestCase):
         res2 = sm.run_simulation(cfg)
         self.assertAlmostEqual(res.total_return, res2.total_return)
 
+    def test_credit_ratio_function(self):
+        self.assertAlmostEqual(sm.credit_ratio(0, 1), 0.45)
+        self.assertAlmostEqual(sm.credit_ratio(10, 1), 0.15, places=3)
+
+    def test_commissions_reduce_equity(self):
+        base_cfg = {
+            "start_price": 100.0,
+            "start_date": "2023-01-02",
+            "end_date": "2023-03-01",
+            "mu": 0.05,
+            "sigma": 0.2,
+            "seed": 2,
+        }
+        no_comm = sm.run_simulation(base_cfg)
+        with_comm = sm.run_simulation({**base_cfg, "commissions": True})
+        self.assertLess(with_comm.equity_curve["Equity"].iloc[-1], no_comm.equity_curve["Equity"].iloc[-1])
+        expected = sum((1.5 + 0.65 * (t.lots * 2)) * 2 for t in with_comm.trades)
+        diff = no_comm.equity_curve["Equity"].iloc[-1] - with_comm.equity_curve["Equity"].iloc[-1]
+        self.assertAlmostEqual(diff, expected, places=2)
+
 if __name__ == '__main__':
     unittest.main()
