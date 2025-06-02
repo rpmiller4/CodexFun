@@ -20,6 +20,24 @@ class SyntheticMarketTests(unittest.TestCase):
         p2 = sm.simulate_prices(100.0, dt.date(2023,1,1), dt.date(2023,12,31), 0.05, 0.2, seed=42)
         self.assertTrue((p1['Close'] == p2['Close']).all())
 
+    def test_heston_price_determinism(self):
+        cfg = {
+            "start_price": 100.0,
+            "start_date": "2023-01-01",
+            "end_date": "2023-03-31",
+            "mu": 0.05,
+            "vol_model": "heston",
+            "kappa": 1.0,
+            "theta": 0.04,
+            "xi": 0.2,
+            "rho": -0.5,
+            "v0": 0.04,
+            "seed": 42,
+        }
+        p1 = sm.run_simulation(cfg)
+        p2 = sm.run_simulation(cfg)
+        self.assertAlmostEqual(p1.total_return, p2.total_return)
+
     def test_run_simulation(self):
         cfg = {
             "start_price": 100.0,
@@ -33,6 +51,19 @@ class SyntheticMarketTests(unittest.TestCase):
         self.assertGreater(len(res.trades), 0)
         self.assertIn('Equity', res.equity_curve.columns)
         # deterministic result for given seed
+        res2 = sm.run_simulation(cfg)
+        self.assertAlmostEqual(res.total_return, res2.total_return)
+
+    def test_run_simulation_heston(self):
+        cfg = {
+            "start_price": 100.0,
+            "start_date": "2022-01-01",
+            "end_date": "2022-12-31",
+            "mu": 0.05,
+            "vol_model": "heston",
+            "seed": 7,
+        }
+        res = sm.run_simulation(cfg)
         res2 = sm.run_simulation(cfg)
         self.assertAlmostEqual(res.total_return, res2.total_return)
 
