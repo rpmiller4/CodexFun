@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import datetime as dt
+import math
 from dataclasses import dataclass
 from typing import List, Dict
 
 import numpy as np
 import pandas as pd
+
+from option_analysis import black_scholes_price
 
 
 @dataclass
@@ -50,6 +53,8 @@ DEFAULT_CONFIG: Dict[str, object] = {
     "commissions": False,
     "option_spacing": 1,
     "expiry_days": 10,
+    "stop_mult": 2.0,
+    "ga_ensemble_n": 10,
     "seed": 123,
     # optional price dynamics parameters
     "ar1": 0.0,  # autocorrelation coefficient
@@ -61,6 +66,9 @@ DEFAULT_CONFIG: Dict[str, object] = {
         "liquidity": False,
         "margin": False,
         "jumps": False,
+        "iv_pricing": False,
+        "mtm": False,
+        "crash_test": False,
     },
 }
 
@@ -151,6 +159,24 @@ def quote_spread(distance_pts: float) -> float:
     return 0.02 + 0.01 * (distance_pts / 5) ** 2
 
 
+def imp_vol(distance_pts: float, base_sigma: float) -> float:
+    """Return crude implied volatility with simple smile.
+
+    Positive ``distance_pts`` denotes put strikes (rich), negative denotes
+    call strikes (cheap).
+    """
+    sign = np.sign(distance_pts) or 1.0
+    return base_sigma * (1.0 + 0.25 * sign)
+
+
+def _bs_cached(cache: Dict[tuple, float], S: float, K: float, T: float, sigma: float, option_type: str) -> float:
+    """Return Black-Scholes price with simple memoization."""
+    key = (round(S, 2), round(K, 2), round(T, 4), round(sigma, 4), option_type)
+    if key not in cache:
+        cache[key] = black_scholes_price(S, K, T, 0.05, sigma, option_type)
+    return cache[key]
+
+
 def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
     cfg = {**DEFAULT_CONFIG, **(config or {})}
     realism_cfg = {**DEFAULT_CONFIG["realism"], **cfg.get("realism", {})}
@@ -188,6 +214,8 @@ def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
     expiry_days = int(cfg["expiry_days"])
     risk_frac = float(cfg["risk_fraction"])
     max_lots = int(cfg["max_lots"])
+    base_sigma = float(cfg["sigma"])
+    bs_cache: Dict[tuple, float] = {}
 
     for idx, row in prices.iterrows():
         current_date = row["Date"]
@@ -220,8 +248,66 @@ def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
                 remaining.append(t)
         open_trades = remaining
 
-        # log equity after expirations
-        equity.append((current_date, capital))
+        # mark-to-market open positions
+        if realism_cfg.get("mtm"):
+            mtm_list = []
+            for t in open_trades:
+                T = max((t.expiry_date - current_date).days, 0) / 365.0
+                opt_type = "put" if t.trade_type == "bull_put" else "call"
+                iv_s = imp_vol(price - t.short_strike, base_sigma)
+                iv_l = imp_vol(price - t.long_strike, base_sigma)
+                s_p = _bs_cached(bs_cache, price, t.short_strike, T, iv_s, opt_type)
+                l_p = _bs_cached(bs_cache, price, t.long_strike, T, iv_l, opt_type)
+                spread_val = (s_p - l_p) * 100 * t.lots
+                pnl = t.credit * t.lots - spread_val
+                loss = -pnl if pnl < 0 else 0.0
+                if loss >= float(cfg.get("stop_mult", 2.0)) * t.credit * t.lots:
+                    close_comm = t.commission if use_commissions else 0.0
+                    capital += pnl - close_comm
+                    if realism_cfg.get("margin"):
+                        blocked_margin -= t.margin
+                    t.result = pnl - (2 * t.commission if use_commissions else 0.0)
+                    trades.append(t)
+                    continue
+                if (
+                    (t.trade_type == "bull_put" and price <= t.short_strike)
+                    or (t.trade_type == "bear_call" and price >= t.short_strike)
+                ):
+                    intrinsic = (
+                        t.short_strike - price
+                        if t.trade_type == "bull_put"
+                        else price - t.short_strike
+                    )
+                    intrinsic = max(intrinsic, 0) * 100 * t.lots
+                    time_val = max(spread_val - intrinsic, 0.0)
+                    prob = min(0.1, time_val / spread_val) if spread_val > 0 else 0.0
+                    if rng.uniform() < prob:
+                        close_comm = t.commission if use_commissions else 0.0
+                        capital -= (t.width * 100 * t.lots - t.credit * t.lots) + close_comm
+                        if realism_cfg.get("margin"):
+                            blocked_margin -= t.margin
+                        t.result = -((t.width * 100 - t.credit) * t.lots) - (
+                            2 * t.commission if use_commissions else 0.0
+                        )
+                        trades.append(t)
+                        continue
+                mtm_list.append(t)
+            open_trades = mtm_list
+            unrealized = 0.0
+            for t in open_trades:
+                T = max((t.expiry_date - current_date).days, 0) / 365.0
+                opt_type = "put" if t.trade_type == "bull_put" else "call"
+                iv_s = imp_vol(price - t.short_strike, base_sigma)
+                iv_l = imp_vol(price - t.long_strike, base_sigma)
+                s_p = _bs_cached(bs_cache, price, t.short_strike, T, iv_s, opt_type)
+                l_p = _bs_cached(bs_cache, price, t.long_strike, T, iv_l, opt_type)
+                spread_val = (s_p - l_p) * 100 * t.lots
+                unrealized += t.credit * t.lots - spread_val
+            equity_val = capital + unrealized
+        else:
+            equity_val = capital
+
+        equity.append((current_date, equity_val))
 
         # trading decision on Mondays only
         if current_date.weekday() == 0 and idx >= cfg["ema_period"]:
@@ -240,12 +326,23 @@ def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
                 short_strike = price + dist
                 short_strike = np.ceil(short_strike / spacing) * spacing
                 long_strike = short_strike + width
-            ratio_val = credit_ratio(dist, width) if use_curve else credit_ratio_fixed
-            credit = ratio_val * width * 100
-            mid = credit / 100
-            if realism_cfg.get("slippage"):
-                fill = mid - 0.5 * quote_spread(dist) * rng.uniform()
-                credit = fill * 100
+            if realism_cfg.get("iv_pricing"):
+                T = expiry_days / 365.0
+                opt_type = "put" if trade_type == "bull_put" else "call"
+                iv_s = imp_vol(price - short_strike, base_sigma)
+                iv_l = imp_vol(price - long_strike, base_sigma)
+                short_p = _bs_cached(bs_cache, price, short_strike, T, iv_s, opt_type)
+                long_p = _bs_cached(bs_cache, price, long_strike, T, iv_l, opt_type)
+                credit = (short_p - long_p) * 100
+                if realism_cfg.get("slippage"):
+                    credit -= 0.5 * quote_spread(dist) * rng.uniform() * 100
+            else:
+                ratio_val = credit_ratio(dist, width) if use_curve else credit_ratio_fixed
+                credit = ratio_val * width * 100
+                if realism_cfg.get("slippage"):
+                    mid = credit / 100
+                    fill = mid - 0.5 * quote_spread(dist) * rng.uniform()
+                    credit = fill * 100
             max_loss_per_lot = width * 100 - credit
             budget = capital * risk_frac
             lots = int(min(max_lots, np.floor(budget / max_loss_per_lot)))
@@ -334,11 +431,38 @@ def run_simulation_multi(
     return pd.DataFrame(rows)
 
 
+def ga_fitness(config: Dict[str, object]) -> float:
+    """Return GA fitness as mean(return - max_drawdown) over multiple seeds."""
+    n = int(config.get("ga_ensemble_n", DEFAULT_CONFIG.get("ga_ensemble_n", 10)))
+    df = run_simulation_multi(config, seeds=list(range(n)))
+    return float(np.mean(df["total_return"] - df["max_drawdown"]))
+
+
+def generate_crash_path(start_price: float, days: int) -> pd.DataFrame:
+    """Return deterministic crash path: -35% over 30 days with 80% vol."""
+    dates = pd.date_range(dt.date.today(), periods=days, freq="D")
+    prices = []
+    for i in range(days):
+        if i < 30:
+            frac = (i + 1) / 30.0
+            price = start_price * (1 - 0.35 * frac)
+        else:
+            last = prices[-1] if prices else start_price
+            sigma = 0.80
+            ret = np.random.normal(-0.5 * sigma ** 2 / 252, sigma / math.sqrt(252))
+            price = last * math.exp(ret)
+        prices.append(price)
+    return pd.DataFrame({"Date": dates.date, "Close": prices})
+
+
 __all__ = [
     "simulate_prices",
     "compute_ema",
     "credit_ratio",
     "quote_spread",
+    "imp_vol",
+    "ga_fitness",
+    "generate_crash_path",
     "run_simulation",
     "run_simulation_multi",
     "Trade",
