@@ -7,6 +7,7 @@ from typing import List, Dict
 
 import numpy as np
 import pandas as pd
+import random
 
 from option_analysis import black_scholes_price
 
@@ -54,7 +55,8 @@ DEFAULT_CONFIG: Dict[str, object] = {
     "option_spacing": 1,
     "expiry_days": 10,
     "stop_mult": 2.0,
-    "ga_ensemble_n": 10,
+    "ga_ensemble_n": 5,
+    "ga_seed_mode": "mean",
     "seed": 123,
     # optional price dynamics parameters
     "ar1": 0.0,  # autocorrelation coefficient
@@ -112,17 +114,17 @@ def simulate_prices(
     jumps = np.zeros(n, dtype=bool)
     prices[0] = start_price
     prev_ret = 0.0
-    variance = sigma ** 2
+    variance = sigma**2
     for i in range(1, n):
         # update volatility based on previous return if clustering enabled
         if vol_cluster > 0:
-            variance = (1 - vol_cluster) * (sigma ** 2) + vol_cluster * (prev_ret ** 2)
+            variance = (1 - vol_cluster) * (sigma**2) + vol_cluster * (prev_ret**2)
             sigma_t = np.sqrt(variance)
         else:
             sigma_t = sigma
 
         z = rng.standard_normal()
-        ret = (mu - 0.5 * sigma_t ** 2) * dt_frac + sigma_t * np.sqrt(dt_frac) * z
+        ret = (mu - 0.5 * sigma_t**2) * dt_frac + sigma_t * np.sqrt(dt_frac) * z
 
         # add AR(1) autocorrelation
         if ar1 != 0.0:
@@ -173,12 +175,18 @@ def simulate_heston_prices(cfg: Dict[str, object]) -> pd.DataFrame:
     for i in range(1, n):
         z1 = rng.standard_normal()
         z2 = rng.standard_normal()
-        z2 = rho * z1 + math.sqrt(1 - rho ** 2) * z2
+        z2 = rho * z1 + math.sqrt(1 - rho**2) * z2
         v_prev = max(variances[i - 1], 0.0)
-        v = v_prev + kappa * (theta - v_prev) * dt_frac + xi * math.sqrt(v_prev) * math.sqrt(dt_frac) * z2
+        v = (
+            v_prev
+            + kappa * (theta - v_prev) * dt_frac
+            + xi * math.sqrt(v_prev) * math.sqrt(dt_frac) * z2
+        )
         v = max(v, 0.0)
         variances[i] = v
-        ret = (mu - 0.5 * v_prev) * dt_frac + math.sqrt(v_prev) * math.sqrt(dt_frac) * z1
+        ret = (mu - 0.5 * v_prev) * dt_frac + math.sqrt(v_prev) * math.sqrt(
+            dt_frac
+        ) * z1
         prices[i] = prices[i - 1] * math.exp(ret)
 
     return pd.DataFrame({"Date": dates.date, "Close": prices, "Var": variances})
@@ -213,7 +221,14 @@ def imp_vol(distance_pts: float, base_sigma: float) -> float:
     return base_sigma * (1.0 + 0.25 * sign)
 
 
-def _bs_cached(cache: Dict[tuple, float], S: float, K: float, T: float, sigma: float, option_type: str) -> float:
+def _bs_cached(
+    cache: Dict[tuple, float],
+    S: float,
+    K: float,
+    T: float,
+    sigma: float,
+    option_type: str,
+) -> float:
     """Return Black-Scholes price with simple memoization."""
     key = (round(S, 2), round(K, 2), round(T, 4), round(sigma, 4), option_type)
     if key not in cache:
@@ -240,7 +255,11 @@ def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
             ar1=float(cfg.get("ar1", 0.0)),
             vol_cluster=float(cfg.get("vol_cluster", 0.0)),
             reaction=float(cfg.get("reaction", 1.0)),
-            jump_prob=float(realism_cfg.get("jump_prob", 0.01)) if realism_cfg.get("jumps") else 0.0,
+            jump_prob=(
+                float(realism_cfg.get("jump_prob", 0.01))
+                if realism_cfg.get("jumps")
+                else 0.0
+            ),
             down_jump=float(realism_cfg.get("down_jump", -0.08)),
             up_jump=float(realism_cfg.get("up_jump", 0.04)),
         )
@@ -318,9 +337,8 @@ def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
                     t.result = pnl - (2 * t.commission if use_commissions else 0.0)
                     trades.append(t)
                     continue
-                if (
-                    (t.trade_type == "bull_put" and price <= t.short_strike)
-                    or (t.trade_type == "bear_call" and price >= t.short_strike)
+                if (t.trade_type == "bull_put" and price <= t.short_strike) or (
+                    t.trade_type == "bear_call" and price >= t.short_strike
                 ):
                     intrinsic = (
                         t.short_strike - price
@@ -332,7 +350,9 @@ def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
                     prob = min(0.1, time_val / spread_val) if spread_val > 0 else 0.0
                     if rng.uniform() < prob:
                         close_comm = t.commission if use_commissions else 0.0
-                        capital -= (t.width * 100 * t.lots - t.credit * t.lots) + close_comm
+                        capital -= (
+                            t.width * 100 * t.lots - t.credit * t.lots
+                        ) + close_comm
                         if realism_cfg.get("margin"):
                             blocked_margin -= t.margin
                         t.result = -((t.width * 100 - t.credit) * t.lots) - (
@@ -386,7 +406,9 @@ def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
                 if realism_cfg.get("slippage"):
                     credit -= 0.5 * quote_spread(dist) * rng.uniform() * 100
             else:
-                ratio_val = credit_ratio(dist, width) if use_curve else credit_ratio_fixed
+                ratio_val = (
+                    credit_ratio(dist, width) if use_curve else credit_ratio_fixed
+                )
                 credit = ratio_val * width * 100
                 if realism_cfg.get("slippage"):
                     mid = credit / 100
@@ -397,7 +419,10 @@ def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
             lots = int(min(max_lots, np.floor(budget / max_loss_per_lot)))
             if lots >= 1:
                 margin_req = max(width * 100 - credit, 0) * lots
-                if realism_cfg.get("margin") and capital - blocked_margin - margin_req < 0:
+                if (
+                    realism_cfg.get("margin")
+                    and capital - blocked_margin - margin_req < 0
+                ):
                     continue
                 commission = 1.5 + 0.65 * (lots * 2) if use_commissions else 0.0
                 capital += credit * lots - commission
@@ -441,7 +466,9 @@ def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
         equity.append((final_date, capital))
 
     equity_df = (
-        pd.DataFrame(equity, columns=["Date", "Equity"]).drop_duplicates("Date", keep="last").reset_index(drop=True)
+        pd.DataFrame(equity, columns=["Date", "Equity"])
+        .drop_duplicates("Date", keep="last")
+        .reset_index(drop=True)
     )
     returns = equity_df["Equity"].pct_change().fillna(0)
     cumulative = (1 + returns).cumprod()
@@ -471,20 +498,38 @@ def run_simulation_multi(
     for s in seeds:
         cfg = {**(config or {}), "seed": s}
         res = run_simulation(cfg)
-        rows.append({
-            "seed": s,
-            "total_return": res.total_return,
-            "max_drawdown": res.max_drawdown,
-            "win_rate": res.win_rate,
-        })
+        rows.append(
+            {
+                "seed": s,
+                "total_return": res.total_return,
+                "max_drawdown": res.max_drawdown,
+                "win_rate": res.win_rate,
+            }
+        )
     return pd.DataFrame(rows)
 
 
+def _seed_list(cfg: Dict[str, object], n: int) -> List[int]:
+    """Return deterministic seed list derived from ``cfg``."""
+    import hashlib
+
+    items = [(k, cfg[k]) for k in sorted(cfg) if k != "seed"]
+    rep = repr(items).encode()
+    h = int(hashlib.sha256(rep).hexdigest(), 16)
+    rng = random.Random(h)
+    return [rng.randrange(0, 2**32 - 1) for _ in range(n)]
+
+
 def ga_fitness(config: Dict[str, object]) -> float:
-    """Return GA fitness as mean(return - max_drawdown) over multiple seeds."""
-    n = int(config.get("ga_ensemble_n", DEFAULT_CONFIG.get("ga_ensemble_n", 10)))
-    df = run_simulation_multi(config, seeds=list(range(n)))
-    return float(np.mean(df["total_return"] - df["max_drawdown"]))
+    """Return GA fitness using an ensemble of seeds."""
+    cfg = {**DEFAULT_CONFIG, **(config or {})}
+    n = int(cfg.get("ga_ensemble_n", DEFAULT_CONFIG.get("ga_ensemble_n", 5)))
+    mode = str(cfg.get("ga_seed_mode", DEFAULT_CONFIG.get("ga_seed_mode", "mean")))
+    cfg = {k: v for k, v in cfg.items() if k != "seed"}
+    seeds = _seed_list(cfg, n)
+    df = run_simulation_multi(cfg, seeds=seeds)
+    scores = df["total_return"] - df["max_drawdown"]
+    return float(scores.mean() if mode == "mean" else scores.min())
 
 
 def generate_crash_path(start_price: float, days: int) -> pd.DataFrame:
@@ -498,7 +543,7 @@ def generate_crash_path(start_price: float, days: int) -> pd.DataFrame:
         else:
             last = prices[-1] if prices else start_price
             sigma = 0.80
-            ret = np.random.normal(-0.5 * sigma ** 2 / 252, sigma / math.sqrt(252))
+            ret = np.random.normal(-0.5 * sigma**2 / 252, sigma / math.sqrt(252))
             price = last * math.exp(ret)
         prices.append(price)
     return pd.DataFrame({"Date": dates.date, "Close": prices})
@@ -570,9 +615,13 @@ def main(argv: list[str] | None = None) -> None:
             overrides[key] = val
 
     if "short_leg_distance" in overrides:
-        overrides["short_leg_distance"] = tuple(float(x) for x in overrides["short_leg_distance"])
+        overrides["short_leg_distance"] = tuple(
+            float(x) for x in overrides["short_leg_distance"]
+        )
     if "spread_width_range" in overrides:
-        overrides["spread_width_range"] = tuple(int(x) for x in overrides["spread_width_range"])
+        overrides["spread_width_range"] = tuple(
+            int(x) for x in overrides["spread_width_range"]
+        )
 
     result = run_simulation(overrides)
 
@@ -586,7 +635,9 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.save_csv:
         os.makedirs(args.save_csv, exist_ok=True)
-        result.equity_curve.to_csv(os.path.join(args.save_csv, "equity.csv"), index=False)
+        result.equity_curve.to_csv(
+            os.path.join(args.save_csv, "equity.csv"), index=False
+        )
         pd.DataFrame([t.__dict__ for t in result.trades]).to_csv(
             os.path.join(args.save_csv, "trades.csv"), index=False
         )
