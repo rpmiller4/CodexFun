@@ -21,6 +21,7 @@ class Trade:
     credit: float
     lots: int
     commission: float = 0.0
+    margin: float = 0.0
     result: float | None = None  # P&L realized at expiry
 
 
@@ -54,6 +55,13 @@ DEFAULT_CONFIG: Dict[str, object] = {
     "ar1": 0.0,  # autocorrelation coefficient
     "vol_cluster": 0.0,  # volatility clustering weight
     "reaction": 1.0,  # nonlinear reaction exponent
+    "liq_decay": 12,
+    "realism": {
+        "slippage": False,
+        "liquidity": False,
+        "margin": False,
+        "jumps": False,
+    },
 }
 
 
@@ -67,13 +75,17 @@ def simulate_prices(
     ar1: float = 0.0,
     vol_cluster: float = 0.0,
     reaction: float = 1.0,
+    jump_prob: float = 0.0,
+    down_jump: float = -0.08,
+    up_jump: float = 0.04,
 ) -> pd.DataFrame:
     """Return DataFrame of simulated prices.
 
     The base process is geometric Brownian motion. Optional parameters allow
     adding AR(1) autocorrelation (``ar1``), volatility clustering via a simple
-    GARCH(1,1)-like term (``vol_cluster``), and a nonlinear price reaction
-    exponent (``reaction``).
+    GARCH(1,1)-like term (``vol_cluster``), a nonlinear price reaction
+    exponent (``reaction``) and rare jump-diffusion events controlled by
+    ``jump_prob`` and jump magnitudes.
     """
 
     rng = np.random.default_rng(seed)
@@ -81,6 +93,7 @@ def simulate_prices(
     n = len(dates)
     dt_frac = 1 / 252.0
     prices = np.empty(n)
+    jumps = np.zeros(n, dtype=bool)
     prices[0] = start_price
     prev_ret = 0.0
     variance = sigma ** 2
@@ -104,10 +117,19 @@ def simulate_prices(
             sign = np.sign(ret)
             ret = sign * (abs(ret) ** reaction)
 
-        prices[i] = prices[i - 1] * np.exp(ret)
+        price = prices[i - 1] * np.exp(ret)
+
+        jump_flag = False
+        if jump_prob > 0 and rng.uniform() < jump_prob:
+            jump_flag = True
+            move = rng.choice([down_jump, up_jump], p=[2 / 3, 1 / 3])
+            price *= 1 + move
+
+        prices[i] = price
+        jumps[i] = jump_flag
         prev_ret = ret
 
-    return pd.DataFrame({"Date": dates.date, "Close": prices})
+    return pd.DataFrame({"Date": dates.date, "Close": prices, "Jump": jumps})
 
 
 def compute_ema(series: pd.Series, period: int) -> pd.Series:
@@ -124,8 +146,15 @@ def credit_ratio(dist: float, width: float) -> float:
     return float(np.clip(ratio, 0.15, 0.45))
 
 
+def quote_spread(distance_pts: float) -> float:
+    """Return bid/ask spread in dollars based on strike distance."""
+    return 0.02 + 0.01 * (distance_pts / 5) ** 2
+
+
 def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
     cfg = {**DEFAULT_CONFIG, **(config or {})}
+    realism_cfg = {**DEFAULT_CONFIG["realism"], **cfg.get("realism", {})}
+    cfg["realism"] = realism_cfg
     start_date = dt.datetime.strptime(str(cfg["start_date"]), "%Y-%m-%d").date()
     end_date = dt.datetime.strptime(str(cfg["end_date"]), "%Y-%m-%d").date()
     prices = simulate_prices(
@@ -138,6 +167,9 @@ def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
         ar1=float(cfg.get("ar1", 0.0)),
         vol_cluster=float(cfg.get("vol_cluster", 0.0)),
         reaction=float(cfg.get("reaction", 1.0)),
+        jump_prob=float(realism_cfg.get("jump_prob", 0.01)) if realism_cfg.get("jumps") else 0.0,
+        down_jump=float(realism_cfg.get("down_jump", -0.08)),
+        up_jump=float(realism_cfg.get("up_jump", 0.04)),
     )
     prices["EMA"] = compute_ema(prices["Close"], int(cfg["ema_period"]))
 
@@ -145,6 +177,7 @@ def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
     equity = []
     trades: List[Trade] = []
     open_trades: List[Trade] = []
+    blocked_margin = 0.0
     rng = np.random.default_rng(int(cfg.get("seed", 0)))
     spacing = float(cfg["option_spacing"])
     dist_low, dist_high = cfg["short_leg_distance"]
@@ -180,6 +213,8 @@ def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
                     t.result = t.credit * t.lots - (
                         2 * t.commission if use_commissions else 0.0
                     )
+                if realism_cfg.get("margin"):
+                    blocked_margin -= t.margin
                 trades.append(t)
             else:
                 remaining.append(t)
@@ -193,6 +228,10 @@ def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
             trade_type = "bear_call" if price > ema else "bull_put"
             dist = rng.uniform(dist_low, dist_high)
             width = rng.integers(width_low, width_high + 1)
+            if realism_cfg.get("liquidity"):
+                p_quote = float(np.exp(-dist / float(cfg.get("liq_decay", 12))))
+                if rng.uniform() > p_quote:
+                    continue
             if trade_type == "bull_put":
                 short_strike = price - dist
                 short_strike = np.floor(short_strike / spacing) * spacing
@@ -203,12 +242,21 @@ def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
                 long_strike = short_strike + width
             ratio_val = credit_ratio(dist, width) if use_curve else credit_ratio_fixed
             credit = ratio_val * width * 100
+            mid = credit / 100
+            if realism_cfg.get("slippage"):
+                fill = mid - 0.5 * quote_spread(dist) * rng.uniform()
+                credit = fill * 100
             max_loss_per_lot = width * 100 - credit
             budget = capital * risk_frac
             lots = int(min(max_lots, np.floor(budget / max_loss_per_lot)))
             if lots >= 1:
+                margin_req = max(width * 100 - credit, 0) * lots
+                if realism_cfg.get("margin") and capital - blocked_margin - margin_req < 0:
+                    continue
                 commission = 1.5 + 0.65 * (lots * 2) if use_commissions else 0.0
                 capital += credit * lots - commission
+                if realism_cfg.get("margin"):
+                    blocked_margin += margin_req
                 t = Trade(
                     open_date=current_date,
                     expiry_date=current_date + dt.timedelta(days=expiry_days),
@@ -219,6 +267,7 @@ def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
                     credit=credit,
                     lots=lots,
                     commission=commission,
+                    margin=margin_req if realism_cfg.get("margin") else 0.0,
                 )
                 open_trades.append(t)
     # finalize any trades after last date
@@ -240,6 +289,8 @@ def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
             t.result = t.credit * t.lots - (
                 2 * t.commission if use_commissions else 0.0
             )
+        if realism_cfg.get("margin"):
+            blocked_margin -= t.margin
         trades.append(t)
         equity.append((final_date, capital))
 
@@ -287,6 +338,7 @@ __all__ = [
     "simulate_prices",
     "compute_ema",
     "credit_ratio",
+    "quote_spread",
     "run_simulation",
     "run_simulation_multi",
     "Trade",

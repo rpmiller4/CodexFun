@@ -103,6 +103,20 @@ features:
 - **AR(1) autocorrelation** via the `ar1` parameter.
 - **Volatility clustering** controlled by `vol_cluster`.
 - **Nonlinear price reaction** using the `reaction` exponent.
+- **Realism flags** grouped under `realism`:
+  - `slippage` – subtract random bid/ask spread from fills.
+  - `liquidity` – probability of trade execution decreases with strike distance.
+  - `margin` – enforce dynamic margin requirements per trade.
+  - `jumps` – simulate rare jump-diffusion price moves.
+
+Default realism configuration:
+
+```python
+{"slippage": False, "liquidity": False, "margin": False, "jumps": False}
+```
+
+The helper `quote_spread(distance)` computes the bid/ask spread used for
+slippage when enabled.
 
 Use `run_simulation_multi` to evaluate a configuration over multiple random
 seeds and analyse the distribution of returns.
