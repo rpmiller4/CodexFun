@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Dict
 
 import numpy as np
@@ -52,15 +52,15 @@ DEFAULT_CONFIG: Dict[str, object] = {
 
 def simulate_prices(
     start_price: float,
-    start: dt.date,
-    end: dt.date,
+    start_date: dt.date,
+    end_date: dt.date,
     mu: float,
     sigma: float,
     seed: int = 0,
 ) -> pd.DataFrame:
     """Return DataFrame of simulated prices using geometric Brownian motion."""
     rng = np.random.default_rng(seed)
-    dates = pd.date_range(start, end, freq="D")
+    dates = pd.date_range(start_date, end_date, freq="D")
     n = len(dates)
     dt_frac = 1 / 252.0
     prices = np.empty(n)
@@ -78,12 +78,12 @@ def compute_ema(series: pd.Series, period: int) -> pd.Series:
 
 def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
     cfg = {**DEFAULT_CONFIG, **(config or {})}
-    start = dt.datetime.strptime(str(cfg["start_date"]), "%Y-%m-%d").date()
-    end = dt.datetime.strptime(str(cfg["end_date"]), "%Y-%m-%d").date()
+    start_date = dt.datetime.strptime(str(cfg["start_date"]), "%Y-%m-%d").date()
+    end_date = dt.datetime.strptime(str(cfg["end_date"]), "%Y-%m-%d").date()
     prices = simulate_prices(
         start_price=float(cfg["start_price"]),
-        start=start,
-        end=end,
+        start_date=start_date,
+        end_date=end_date,
         mu=float(cfg["mu"]),
         sigma=float(cfg["sigma"]),
         seed=int(cfg.get("seed", 0)),
@@ -194,4 +194,90 @@ def run_simulation(config: Dict[str, object] | None = None) -> SimulationResult:
     )
 
 
-__all__ = ["simulate_prices", "compute_ema", "run_simulation", "Trade", "SimulationResult"]
+__all__ = [
+    "simulate_prices",
+    "compute_ema",
+    "run_simulation",
+    "Trade",
+    "SimulationResult",
+]
+
+
+def main(argv: list[str] | None = None) -> None:
+    import argparse
+    import os
+    import matplotlib.pyplot as plt
+
+    parser = argparse.ArgumentParser(description="Synthetic credit-spread simulator")
+    parser.add_argument("--start_price", type=float)
+    parser.add_argument("--start_date")
+    parser.add_argument("--end_date")
+    parser.add_argument("--mu", type=float)
+    parser.add_argument("--sigma", type=float)
+    parser.add_argument("--ema_period", type=int)
+    parser.add_argument("--risk_fraction", type=float)
+    parser.add_argument("--max_lots", type=int)
+    parser.add_argument("--short_leg_distance", nargs=2, type=float)
+    parser.add_argument("--spread_width_range", nargs=2, type=int)
+    parser.add_argument("--trade_credit_ratio", type=float)
+    parser.add_argument("--option_spacing", type=float)
+    parser.add_argument("--expiry_days", type=int)
+    parser.add_argument("--seed", type=int)
+    parser.add_argument("--no_plot", action="store_true")
+    parser.add_argument("--save_csv")
+
+    args = parser.parse_args(argv)
+    overrides: dict[str, object] = {}
+    for key in [
+        "start_price",
+        "start_date",
+        "end_date",
+        "mu",
+        "sigma",
+        "ema_period",
+        "risk_fraction",
+        "max_lots",
+        "short_leg_distance",
+        "spread_width_range",
+        "trade_credit_ratio",
+        "option_spacing",
+        "expiry_days",
+        "seed",
+    ]:
+        val = getattr(args, key)
+        if val is not None:
+            overrides[key] = val
+
+    if "short_leg_distance" in overrides:
+        overrides["short_leg_distance"] = tuple(float(x) for x in overrides["short_leg_distance"])
+    if "spread_width_range" in overrides:
+        overrides["spread_width_range"] = tuple(int(x) for x in overrides["spread_width_range"])
+
+    result = run_simulation(overrides)
+
+    end_eq = result.equity_curve["Equity"].iloc[-1]
+    print("--- Simulation Summary ---")
+    print(f"End Equity:     ${end_eq:,.2f}")
+    print(f"Total Return:   {result.total_return * 100:+.2f}%")
+    print(f"Win Rate:       {result.win_rate * 100:.1f}%")
+    print(f"Max Drawdown:   {result.max_drawdown * 100:.1f}%")
+    print(f"Trades Placed:  {len(result.trades)}")
+
+    if args.save_csv:
+        os.makedirs(args.save_csv, exist_ok=True)
+        result.equity_curve.to_csv(os.path.join(args.save_csv, "equity.csv"), index=False)
+        pd.DataFrame([t.__dict__ for t in result.trades]).to_csv(
+            os.path.join(args.save_csv, "trades.csv"), index=False
+        )
+
+    if not args.no_plot:
+        plt.plot(result.equity_curve["Date"], result.equity_curve["Equity"])
+        plt.xlabel("Date")
+        plt.ylabel("Equity")
+        plt.title("Equity Curve")
+        plt.tight_layout()
+        plt.show()
+
+
+if __name__ == "__main__":  # pragma: no cover - CLI entry
+    main()
